@@ -2,11 +2,11 @@
   <img src="https://img.shields.io/badge/Python-3.13+-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.13+">
   <img src="https://img.shields.io/badge/Status-Active-green?style=flat-square" alt="Active">
   <img src="https://img.shields.io/badge/Stage-MVP-red?style=flat-square" alt="MVP">
-  <img src="https://img.shields.io/github/license/shiyao222333-afk/kb-query-engine?style=flat-square" alt="MIT License">
-  <img src="https://img.shields.io/github/stars/shiyao222333-afk/kb-query-engine?style=social" alt="Stars">
+  <img src="https://img.shields.io/github/license/shiyao222333-afk/knowledge-forge?style=flat-square" alt="MIT License">
+  <img src="https://img.shields.io/github/stars/shiyao222333-afk/knowledge-forge?style=social" alt="Stars">
 </p>
 
-<h1 align="center">🗂️ KB Query Engine</h1>
+<h1 align="center">🔥 KnowledgeForge / 知炬</h1>
 
 <p align="center">
   <b>个人知识库管理系统</b><br>
@@ -18,8 +18,8 @@
   <a href="#-当前进度"><b>当前进度</b></a> ·
   <a href="#-路线图"><b>路线图</b></a> ·
   <a href="#-快速开始"><b>快速开始</b></a> ·
-  <a href="#-常见问题"><b>常见问题</b></a> ·
-  <a href="https://github.com/shiyao222333-afk/kb-query-engine/issues"><b>提Issue</b></a>
+  <a href="#-架构概览"><b>架构</b></a> ·
+  <a href="https://github.com/shiyao222333-afk/knowledge-forge/issues"><b>提Issue</b></a>
 </p>
 
 ---
@@ -27,11 +27,11 @@
 ## 🧭 项目愿景
 
 > 你积累了几 GB 的技术文档、手册、笔记、截图 —— 但它们是「死资料」，找不到、用不上。
-> **KB Query Engine 的目标：把这些碎片化资料，变成你可以对话的活知识库。**
+> **KnowledgeForge（知炬）的目标：把这些碎片化资料，变成你可以对话的活知识库。**
 
 ### 我们不走传统知识库的老路
 
-| 传统知识库 ❌ | KB Query Engine 的方向 ✅ |
+| 传统知识库 ❌ | KnowledgeForge ✅ |
 |--------------|--------------------------|
 | 全文搜索，靠人自己找 | AI 理解语义，直接给答案 |
 | 文档格式受限（只支持PDF） | 图片/截图/OCR/文本全支持 |
@@ -54,9 +54,11 @@
 - **向量搜索**：Qdrant + Ollama 本地嵌入模型，语义检索
 - **引用合成**：LLM API 生成答案 + 标注来源引用 `[引用N]`
 - **引用粒度控制**：大表格按行拆分，避免引用范围过大
+- **引用编号连续化**：后处理重编号，引用不跳跃
 - **公式渲染**：KaTeX 服务端渲染，HTML 报告中原生显示公式
 - **HTML 报告**：双层结构（AI回答 + 原始素材），支持打印/分享
 - **数据清洗**：入库 SHA256 去重；搜索结果同源去重 + OCR 质量过滤
+- **IMA 知识库联动**：支持从 IMA 知识库同步内容（`sync_ima.py`）
 
 ### 🔜 近期规划（v0.2 ~ v0.5）
 
@@ -96,7 +98,7 @@
 ## 🏗️ 架构概览
 
 ```
-知识库管理系统（分层架构）
+KnowledgeForge（分层架构）
 
 ┌─────────────────────────────────────────────┐
 │  用户层：CLI / Web UI（规划中）           │
@@ -115,6 +117,16 @@
 - OCR引擎：[PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) / PPStructureV3
 - LLM合成：OpenAI 兼容 API（默认 DeepSeek）
 - 公式渲染：[KaTeX](https://github.com/KaTeX/KaTeX)
+
+---
+
+## 📐 操作逻辑流程图
+
+> 完整的 Mermaid 流程图（10张图）已整理在单独文件中：
+
+- **[操作流程全图（FLOW_DIAGRAM.md）](FLOw_DIAGRAM.md)** — 含总体架构、摄入流程、查询流程、引用优化、HTML报告结构等
+
+GitHub 原生渲染 Mermaid 图，点击上方链接即可查看。
 
 ---
 
@@ -172,6 +184,13 @@ python kb_query.py "齿轮的失效形式有哪些" --answer --llm-api-key sk-xx
 python kb_query.py "齿轮参数表" --top 10
 ```
 
+### 4. 从 IMA 知识库同步（可选）
+
+```bash
+# 从已导出的 IMA 文件目录同步
+python sync_ima.py --import-dir D:\ima_exports\
+```
+
 ---
 
 ## ⚙️ 配置说明
@@ -215,8 +234,8 @@ python kb_query.py "你的问题" --answer --llm-api-key sk-xxx
 
 ### 你可以怎么参与
 
-- 🐛 **报告 Bug**：[提交 Issue](https://github.com/shiyao222333-afk/kb-query-engine/issues/new?template=bug_report.yml)
-- 💡 **提议新功能**：[功能请求](https://github.com/shiyao222333-afk/kb-query-engine/issues/new?template=feature_request.yml)
+- 🐛 **报告 Bug**：[提交 Issue](https://github.com/shiyao222333-afk/knowledge-forge/issues/new?template=bug_report.yml)
+- 💡 **提议新功能**：[功能请求](https://github.com/shiyao222333-afk/knowledge-forge/issues/new?template=feature_request.yml)
 - 💻 **提交代码**：Fork → 分支 → PR
 - 📖 **完善文档**：路线图、使用案例、最佳实践
 
