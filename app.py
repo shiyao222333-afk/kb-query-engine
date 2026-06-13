@@ -10,6 +10,13 @@ import sys
 # ============================================================
 # 页面配置（必须放在最前面）
 # ============================================================
+import streamlit as st
+import os
+import sys
+
+# 导入火焰背景组件
+from utils.flame_bg import render_flame_css_background
+
 st.set_page_config(
     page_title="KnowledgeForge / 知炬",
     page_icon="🔥",
@@ -17,25 +24,37 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# 渲染像素火焰背景（固定在页面底部）
+render_flame_css_background()
+
 # ============================================================
 # 自定义 CSS — 深色主题 + 橙红渐变强调色
 # ============================================================
 CUSTOM_CSS = """
 <style>
-    /* 全局背景 */
+    /* 全局背景 — 半透明，让火焰透出来 */
     .stApp {
-        background-color: #0E1117;
+        background: rgba(14, 17, 23, 0.85) !important;
     }
     
-    /* 侧边栏 */
+    /* 主内容容器 — 半透明 */
+    .main .block-container {
+        background: rgba(14, 17, 23, 0.9) !important;
+        border-radius: 12px;
+        padding: 2rem;
+    }
+    
+    /* 侧边栏 — 半透明毛玻璃效果 */
     [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
+        background: rgba(26, 26, 46, 0.92) !important;
+        backdrop-filter: blur(10px);
         border-right: 1px solid #333;
     }
     
     /* 标题 */
     h1, h2, h3 {
         color: #F7C948 !important;
+        text-shadow: 0 0 10px rgba(247, 201, 72, 0.3);
     }
     
     /* 按钮 — 主按钮橙红渐变 */
@@ -45,11 +64,12 @@ CUSTOM_CSS = """
         font-weight: bold !important;
         border: none !important;
         border-radius: 8px !important;
+        box-shadow: 0 0 15px rgba(255, 107, 53, 0.3);
     }
     
     /* 按钮 — 次按钮 */
     .stButton > button[kind="secondary"] {
-        background: #1a1a2e !important;
+        background: rgba(26, 26, 46, 0.8) !important;
         color: #F7C948 !important;
         border: 1px solid #FF6B35 !important;
         border-radius: 8px !important;
@@ -57,7 +77,15 @@ CUSTOM_CSS = """
     
     /* 输入框 */
     .stTextInput > div > div > input {
-        background-color: #1a1a2e !important;
+        background-color: rgba(26, 26, 46, 0.8) !important;
+        color: #FFFFFF !important;
+        border: 1px solid #333 !important;
+        border-radius: 8px !important;
+    }
+    
+    /* 文本区域 */
+    .stTextArea > div > div > textarea {
+        background-color: rgba(26, 26, 46, 0.8) !important;
         color: #FFFFFF !important;
         border: 1px solid #333 !important;
         border-radius: 8px !important;
@@ -65,7 +93,7 @@ CUSTOM_CSS = """
     
     /* 文件上传器 */
     [data-testid="stFileUploader"] {
-        background: #1a1a2e;
+        background: rgba(26, 26, 46, 0.6);
         border: 2px dashed #FF6B35;
         border-radius: 12px;
         padding: 20px;
@@ -73,19 +101,19 @@ CUSTOM_CSS = """
     
     /* 成功消息 */
     .stSuccess {
-        background: #1a1a2e !important;
+        background: rgba(26, 26, 46, 0.8) !important;
         border-left: 4px solid #00CC66 !important;
     }
     
     /* 警告消息 */
     .stWarning {
-        background: #1a1a2e !important;
+        background: rgba(26, 26, 46, 0.8) !important;
         border-left: 4px solid #FF6B35 !important;
     }
     
     /* 错误消息 */
     .stError {
-        background: #1a1a2e !important;
+        background: rgba(26, 26, 46, 0.8) !important;
         border-left: 4px solid #FF3366 !important;
     }
     
@@ -96,7 +124,7 @@ CUSTOM_CSS = """
     
     /* 卡片效果 */
     .css-1r6slb0 {
-        background: #1a1a2e;
+        background: rgba(26, 26, 46, 0.7) !important;
         border-radius: 12px;
         padding: 20px;
         border: 1px solid #333;
@@ -120,6 +148,58 @@ CUSTOM_CSS = """
     /* 进度条 */
     .stProgress > div > div {
         background: linear-gradient(90deg, #FF6B35 0%, #F7C948 100%) !important;
+    }
+    
+    /* Tabs */
+    .stTabs [data-baseweb="tab"] {
+        background: rgba(26, 26, 46, 0.6) !important;
+        color: #FFFFFF !important;
+        border-radius: 8px 8px 0 0 !important;
+    }
+    .stTabs [data-baseweb="tab"][aria-selected="true"] {
+        background: rgba(255, 107, 53, 0.2) !important;
+        color: #F7C948 !important;
+        border-bottom: 2px solid #FF6B35 !important;
+    }
+    
+    /* 单选按钮 */
+    .stRadio [data-baseweb="radio"] {
+        color: #FFFFFF !important;
+    }
+    
+    /* 下拉框 */
+    .stSelectbox [data-baseweb="select"] {
+        background: rgba(26, 26, 46, 0.8) !important;
+        color: #FFFFFF !important;
+    }
+    
+    /* 滑块 */
+    .stSlider [data-baseweb="slider"] {
+        color: #FF6B35 !important;
+    }
+    
+    /* 表单 */
+    .stForm {
+        background: rgba(26, 26, 46, 0.6);
+        border-radius: 12px;
+        padding: 20px;
+        border: 1px solid #333;
+    }
+    
+    /* 代码块 */
+    .stCodeBlock {
+        background: rgba(0, 0, 0, 0.6) !important;
+        border-radius: 8px;
+    }
+    
+    /* 数据框 */
+    .stDataFrame {
+        background: rgba(26, 26, 46, 0.6) !important;
+    }
+    
+    /* 底部留白，不让内容盖住火焰 */
+    .main .block-container {
+        padding-bottom: 220px !important;
     }
 </style>
 """
