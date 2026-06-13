@@ -14,8 +14,8 @@ import streamlit as st
 import os
 import sys
 
-# 导入火焰背景组件
-from utils.flame_bg import render_flame_css_background
+# 导入火焰背景
+from utils.flame_bg import render_flame_background, add_flame_css
 
 st.set_page_config(
     page_title="KnowledgeForge / 知炬",
@@ -24,8 +24,11 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# 渲染像素火焰背景（固定在页面底部）
-render_flame_css_background()
+# 渲染像素火焰背景（固定在底部）
+render_flame_background(height=180)
+
+# 添加让火焰可见的 CSS
+add_flame_css()
 
 # ============================================================
 # 自定义 CSS — 深色主题 + 橙红渐变强调色
@@ -207,6 +210,12 @@ CUSTOM_CSS = """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 # ============================================================
+# 火焰横幅（标题下方）
+# ============================================================
+from utils.flame_bg import render_flame_banner
+render_flame_banner(height=100)
+
+# ============================================================
 # 侧边栏导航
 # ============================================================
 with st.sidebar:
@@ -238,6 +247,10 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("🔗 [GitHub](https://github.com/shiyao222333-afk/knowledge-forge)")
     st.markdown("📖 [文档](https://github.com/shiyao222333-afk/knowledge-forge/blob/main/README.md)")
+    
+    # 侧边栏底部小火焰
+    from utils.flame_bg import render_flame_sidebar
+    render_flame_sidebar()
 
 # ============================================================
 # 页面路由

@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>像素火焰</title>
+    <style>
+        * { margin: 0; padding: 0; }
+        body { background: #0E1117; overflow: hidden; }
+        canvas { display: block; width: 100%; height: 180px; }
+    </style>
+</head>
+<body>
+    <canvas id="flame" width="2000" height="180"></canvas>
+    <script>
+        const canvas = document.getElementById('flame');
+        const ctx = canvas.getContext('2d');
+        canvas.width = window.innerWidth;
+        canvas.height = 180;
+        const W = canvas.width, H = canvas.height, PX = 10;
+        const COLS = Math.floor(W / PX), ROWS = Math.floor(H / PX);
+        let fire = Array.from({length: COLS}, () => Array(ROWS).fill(0));
+        let palette = [];
+        for (let i = 0; i < 64; i++) palette.push([i*4,0,0]);
+        for (let i = 0; i < 64; i++) palette.push([255,i*4,0]);
+        for (let i = 0; i < 64; i++) palette.push([255,128+i*2,i*4]);
+        for (let i = 0; i < 64; i++) palette.push([255,255,128+i*2]);
+        function ignite() { for (let x = 0; x < COLS; x++) if (Math.random() > 0.3) fire[x][ROWS-1] = Math.floor(Math.random()*256); }
+        function updateFire() {
+            for (let x = 0; x < COLS; x++) for (let y = ROWS-1; y > 0; y--) if (fire[x][y] > 0) {
+                const d = Math.floor(Math.random()*3), nx = Math.max(0, Math.min(COLS-1, x+Math.floor(Math.random()*3)-1));
+                fire[nx][y-1] = Math.max(0, fire[x][y]-d); fire[x][y] = 0;
+            }
+            if (Math.random() > 0.05) { const x = Math.floor(Math.random()*COLS); fire[x][ROWS-1] = 150+Math.floor(Math.random()*106); }
+        }
+        function waveFlame(t) {
+            fire = Array.from({length: COLS}, () => Array(ROWS).fill(0));
+            for (let x = 0; x < COLS; x++) {
+                const nx = x/COLS, wave = (Math.sin(nx*Math.PI*3+t*0.003)*0.5+Math.sin(nx*Math.PI*7+t*0.005)*0.3+Math.sin(nx*Math.PI*1.5+t*0.001)*0.2)*0.5+0.5;
+                const h = Math.floor(wave*ROWS*0.8);
+                for (let y = ROWS-1; y >= ROWS-h; y--) { const dy = ROWS-1-y, it = Math.floor((1-dy/h)*255*(0.7+Math.random()*0.3)); fire[x][y] = Math.min(255, it); }
+            }
+        }
+        function draw() {
+            ctx.fillStyle = 'rgba(14,17,23,0.1)'; ctx.fillRect(0,0,W,H);
+            for (let x = 0; x < COLS; x++) for (let y = 0; y < ROWS; y++) if (fire[x][y] > 0) {
+                const [r,g,b] = palette[Math.min(255,Math.floor(fire[x][y]))];
+                ctx.fillStyle = `rgb(${r},${g},${b})`; ctx.fillRect(x*PX, y*PX, PX-1, PX-1);
+            }
+        }
+        let frame = 0, mode = 'wave';
+        function animate() {
+            frame++; if (frame % 600 === 0) mode = mode === 'wave' ? 'fire' : 'wave';
+            if (mode === 'wave') waveFlame(frame); else { ignite(); updateFire(); }
+            draw(); requestAnimationFrame(animate);
+        }
+        animate();
+        window.addEventListener('resize', () => { canvas.width = window.innerWidth; });
+    </script>
+</body>
+</html>
