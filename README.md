@@ -1,69 +1,120 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.13+-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.13+">
-  <img src="https://img.shields.io/badge/LLM-DeepSeek-orange?style=flat-square&logo=deepseek&logoColor=white" alt="DeepSeek">
-  <img src="https://img.shields.io/badge/Vector Store-Qdrant-red?style=flat-square&logo=qdrant&logoColor=white" alt="Qdrant">
-  <img src="https://img.shields.io/badge/Formula-KaTeX-brightgreen?style=flat-square&logo=latex&logoColor=white" alt="KaTeX">
+  <img src="https://img.shields.io/badge/Status-Active-green?style=flat-square" alt="Active">
+  <img src="https://img.shields.io/badge/Stage-MVP-red?style=flat-square" alt="MVP">
   <img src="https://img.shields.io/github/license/shiyao222333-afk/kb-query-engine?style=flat-square" alt="MIT License">
   <img src="https://img.shields.io/github/stars/shiyao222333-afk/kb-query-engine?style=social" alt="Stars">
 </p>
 
-<h1 align="center">📚 KB Query Engine</h1>
+<h1 align="center">🗂️ KB Query Engine</h1>
 
 <p align="center">
-  <b>中文技术文档知识库问答系统</b><br>
-  基于 Qdrant + Ollama + LLM API · 支持引用追溯 · 公式渲染 · HTML报告
+  <b>个人知识库管理系统</b><br>
+  从碎片化文档到结构化知识，让 AI 真正理解你的资料
 </p>
 
 <p align="center">
+  <a href="#-项目愿景"><b>项目愿景</b></a> ·
+  <a href="#-当前进度"><b>当前进度</b></a> ·
+  <a href="#-路线图"><b>路线图</b></a> ·
   <a href="#-快速开始"><b>快速开始</b></a> ·
-  <a href="#-功能特性"><b>功能特性</b></a> ·
-  <a href="#-输出示例"><b>输出示例</b></a> ·
   <a href="#-常见问题"><b>常见问题</b></a> ·
   <a href="https://github.com/shiyao222333-afk/kb-query-engine/issues"><b>提Issue</b></a>
 </p>
 
 ---
 
-## 🎯 这个工具能帮你做什么？
+## 🧭 项目愿景
 
-> **场景**：你手上有大量技术文档（PDF、手册、教科书、笔记），想快速找到某个知识点的答案。
+> 你积累了几 GB 的技术文档、手册、笔记、截图 —— 但它们是「死资料」，找不到、用不上。
+> **KB Query Engine 的目标：把这些碎片化资料，变成你可以对话的活知识库。**
 
-| 传统方式 ❌ | KB Query Engine ✅ |
-|-----------|---------------------|
-| 翻几十页手册找公式 | 直接问："齿轮的转动惯量公式是什么？" |
-| 复制粘贴内容给ChatGPT | 本地运行，数据不出门 |
-| 不知道答案在哪份文档 | 自动标注来源 `[引用1]` 并跳转 |
-| 公式显示为乱码 | KaTeX 渲染，打开即用 |
-| 想打印/分享结果 | 一键生成HTML报告（支持打印/PDF） |
+### 我们不走传统知识库的老路
 
-**核心价值**：
-- 📖 **引用可追溯**：每个答案标注来源，点击跳转原文
-- 🔒 **本地优先**：支持纯本地运行（Ollama + Qdrant），数据不出门
-- 📐 **公式完美渲染**：KaTeX 服务端渲染，无JS闪烁
-- 📊 **表格智能拆分**：大表格按行拆分引用，避免引用范围过大
-- 📝 **补充内容标注**：LLM使用非知识库内容时标注 `[补充]`
+| 传统知识库 ❌ | KB Query Engine 的方向 ✅ |
+|--------------|--------------------------|
+| 全文搜索，靠人自己找 | AI 理解语义，直接给答案 |
+| 文档格式受限（只支持PDF） | 图片/截图/OCR/文本全支持 |
+| 搜索结果是一堆文件名 | 答案是综合的，附带来源引用 |
+| 公式/表格/图表无法理解 | 结构化识别，理解表格每一行 |
+| 数据必须上传云端 | 本地优先，数据不出门 |
+| 用完就忘，无法积累 | 每次问答都在丰富知识图谱 |
 
----
-
-## ✨ 功能特性
-
-- **OCR 摄入**：PaddleOCR / PPStructureV3（公式+表格+图表结构化识别）
-- **向量搜索**：Qdrant + qwen3-embedding:4b（2560维）
-- **LLM 合成**：DeepSeek API（OpenAI兼容接口），支持引用标注 + `[补充]` 标记
-- **引用粒度控制**：大表格按行拆分为独立引用，避免引用范围过大
-- **引用重编号**：回答中实际使用的引用自动重编号为连续1~N
-- **公式渲染**：KaTeX 服务端批量渲染，HTML打开即用（无JS实时计算）
-- **HTML 报告**：双层结构（AI回答 + 原始素材），支持打印/PDF
-- **去重过滤**：入库前SHA256去重；搜索结果同源去重 + OCR质量过滤
+**最终目标**：一个完全属于你自己的、会成长的、本地运行的知识大脑。
 
 ---
 
-## 🏗️ 架构
+## 🚀 当前进度（MVP 阶段）
+
+> 以下是 **已实现的基础能力**，作为后续开发的基石。当前版本定位为 **可验证核心假设的原型**。
+
+### ✅ 已实现（v0.1.0）
+
+- **文档摄入**：图片 OCR（PaddleOCR / PPStructureV3）+ 文本文件直接入库
+- **向量搜索**：Qdrant + Ollama 本地嵌入模型，语义检索
+- **引用合成**：LLM API 生成答案 + 标注来源引用 `[引用N]`
+- **引用粒度控制**：大表格按行拆分，避免引用范围过大
+- **公式渲染**：KaTeX 服务端渲染，HTML 报告中原生显示公式
+- **HTML 报告**：双层结构（AI回答 + 原始素材），支持打印/分享
+- **数据清洗**：入库 SHA256 去重；搜索结果同源去重 + OCR 质量过滤
+
+### 🔜 近期规划（v0.2 ~ v0.5）
+
+见 [路线图](#-路线图) 章节。
+
+---
+
+## 🗺️ 路线图
+
+### v0.2 — 知识库管理面板
+- [ ] Web UI：上传/删除/预览知识库中的文档
+- [ ] 知识库统计：文档数量、覆盖主题、存储占用
+- [ ] 批量摄入：拖拽上传整个文件夹
+
+### v0.3 — 知识图谱雏形
+- [ ] 自动提取文档中的实体（公式、参数、概念）
+- [ ] 建立知识点之间的关联关系
+- [ ] 问答时展示相关知识网络
+
+### v0.4 — 多模态理解
+- [ ] 图表理解：识别图中的曲线、趋势、标注
+- [ ] 手写笔记 OCR 优化
+- [ ] 视频帧提取 + 关键帧入库
+
+### v0.5 — 知识库自进化
+- [ ] 用户纠错反馈 → 自动优化入库质量
+- [ ] 定期重新嵌入（模型升级时）
+- [ ] 知识库版本管理（快照/回滚）
+
+### 🌟 更远未来
+- [ ] 多用户知识库（团队协作）
+- [ ] 与 CAD / 设计软件插件联动（直接在设计软件里问技术参数）
+- [ ] 本地 LLM 完整方案（完全离线运行）
+
+---
+
+## 🏗️ 架构概览
 
 ```
-摄入: 图片/文本 → PaddleOCR/PPStructureV3 → 分块嵌入 → Qdrant
-查询: 自然语言 → 向量搜索 → LLM API 合成 → 程序渲染 HTML/PDF
+知识库管理系统（分层架构）
+
+┌─────────────────────────────────────────────┐
+│  用户层：CLI / Web UI（规划中）           │
+├─────────────────────────────────────────────┤
+│  服务层：问答合成 · 引用管理 · 报告生成 │
+├─────────────────────────────────────────────┤
+│  核心层：向量检索 · OCR · 嵌入           │
+├─────────────────────────────────────────────┤
+│  存储层：Qdrant（向量）· 文件系统（原图）│
+└─────────────────────────────────────────────┘
 ```
+
+**技术栈**：
+- 向量数据库：[Qdrant](https://github.com/qdrant/qdrant)
+- 嵌入模型：[Ollama](https://github.com/ollama/ollama) + `qwen3-embedding:4b`
+- OCR引擎：[PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) / PPStructureV3
+- LLM合成：OpenAI 兼容 API（默认 DeepSeek）
+- 公式渲染：[KaTeX](https://github.com/KaTeX/KaTeX)
 
 ---
 
@@ -98,7 +149,7 @@ npm install -g katex
 .\start.bat
 ```
 
-### 2. 摄入文档
+### 2. 构建你的知识库
 
 ```bash
 # 摄入文本文件
@@ -111,13 +162,13 @@ python kb_query.py --ocr "photo.jpg" --source "手册-P3"
 python kb_query.py --ocr "photo.jpg" --check-only
 ```
 
-### 3. 问答
+### 3. 向知识库提问
 
 ```bash
 # 端到端问答（搜索 → LLM 合成 → HTML报告）
 python kb_query.py "齿轮的失效形式有哪些" --answer --llm-api-key sk-xxx
 
-# 纯搜索（不调用 LLM）
+# 纯搜索（不调用 LLM，查看原始素材）
 python kb_query.py "齿轮参数表" --top 10
 ```
 
@@ -133,131 +184,43 @@ python kb_query.py "齿轮参数表" --top 10
 | `KB_LLM_API_KEY` | LLM API Key | （必须自行设置） |
 | `KB_LLM_MODEL` | LLM 模型名 | `deepseek-chat` |
 
-### 命令行参数
-
-#### `--table-split-threshold N`
-表格行数 > N 时按行拆分为独立引用（默认 4）。
+### 常用参数
 
 ```bash
+# 表格行数 > 4 时按行拆分引用（可调整）
 python kb_query.py "转动惯量公式" --answer --table-split-threshold 3
-```
 
-#### `--threshold F`
-搜索相关度阈值（默认 0.3）。
-
----
-
-## 📊 输出格式
-
-### HTML 报告结构
-
-```
-┌─────────────────────────────────────┐
-│  📝 综合回答（AI 合成）           │
-│  - 引用编号高亮 + 跳转锚点      │
-│  - 公式 KaTeX 渲染             │
-│  - [补充] 标记                  │
-├─────────────────────────────────────┤
-│  📚 原始素材（逐条展示）       │
-│  - 被引用的行显示 [引用N] 标签 │
-│  - 未引用的行正常展示（无标签）│
-│  - 图片 base64 嵌入            │
-└─────────────────────────────────────┘
+# 搜索相关度阈值（默认 0.3）
+python kb_query.py "查询词" --threshold 0.5
 ```
 
 ---
 
-## 🔍 引用系统
+## 📊 输出示例
 
-### 引用粒度
+**（规划中：此处将添加知识库管理界面的截图和HTML报告截图）**
 
-- **默认**：每个搜索结果块作为一条引用 `[引用1]` ~ `[引用N]`
-- **大表格**：行数 > 4 时自动按行拆分，每行生成独立引用
+当前可通过以下命令生成 HTML 报告预览：
 
-### 引用重编号
-
-LLM 回答中实际使用的引用编号会被重编号为连续 1~N，避免编号跳跃。
-
-示例：
+```bash
+python kb_query.py "你的问题" --answer --llm-api-key sk-xxx
+# 报告保存于 query_result.html，用浏览器打开即可查看
 ```
-LLM 输出: "根据[引用5]和[引用2]，结果是[引用3]"
-重编号后: "根据[引用1]和[引用2]，结果是[引用3]"
-```
-
-### `[补充]` 标记
-
-LLM 在回答中使用非知识库内容时，需在句末标注 `[补充]`。
-
----
-
-## 📐 公式支持
-
-- **行内公式**：`$...$`（如 `$J=\frac{\pi\rho D^4}{32}$`）
-- **独行公式**：`$$...$$`
-- **渲染方式**：KaTeX 服务端批量渲染（HTML 打开即用，无闪烁）
-
----
-
-## 📋 文件结构
-
-```
-kb_query.py        主程序（OCR/搜索/合成/报告）
-render_math.js      Node.js 脚本（KaTeX 渲染）
-start.bat          Windows 启动脚本（Qdrant + Ollama）
-.gitignore          排除本地数据/日志
-```
-
----
-
-## 🔧 依赖版本
-
-| 依赖 | 版本 |
-|---|---|
-| Python | 3.13+ |
-| requests | 2.31+ |
-| fpdf2 | 2.8+ |
-| PaddleOCR | 3.7+ |
-| Ollama | 0.7+ |
-| qwen3-embedding | 4b（2560维）|
-| Node.js | 22+ |
-| KaTeX | 0.16+ |
-
----
-
-## 📝 版本管理
-
-### 当前版本
-
-`v0.1.0` - 初始版本
-
-### 版本历史
-
-| 版本 | 日期 | 说明 |
-|------|------|------|
-| `v0.1.0` | 2026-06-14 | 初始版本，核心功能完成 |
-
-### 版本更新日志
-
-见 [CHANGELOG.md](CHANGELOG.md)（待创建）
 
 ---
 
 ## 🤝 贡献指南
 
-欢迎提交 Issue 和 Pull Request！
+欢迎参与！这个项目处于早期阶段，每一份贡献都能显著影响方向。
 
-### 提交 Issue
+### 你可以怎么参与
 
-- 🐛 **Bug报告**：描述复现步骤、期望行为、实际行为
-- 💡 **功能请求**：描述使用场景、期望功能
+- 🐛 **报告 Bug**：[提交 Issue](https://github.com/shiyao222333-afk/kb-query-engine/issues/new?template=bug_report.yml)
+- 💡 **提议新功能**：[功能请求](https://github.com/shiyao222333-afk/kb-query-engine/issues/new?template=feature_request.yml)
+- 💻 **提交代码**：Fork → 分支 → PR
+- 📖 **完善文档**：路线图、使用案例、最佳实践
 
-### 提交 Pull Request
-
-1. Fork 本仓库
-2. 创建分支 (`git checkout -b feature/xxx`)
-3. 提交改动 (`git commit -m "feat: xxx"`)
-4. 推送分支 (`git push origin feature/xxx`)
-5. 提交 Pull Request
+详见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ---
 
@@ -276,13 +239,7 @@ MIT License - 详见 [LICENSE](LICENSE) 文件
 
 ---
 
-## 📧 联系我
-
-- GitHub Issues: [提交Issue](https://github.com/shiyao222333-afk/kb-query-engine/issues)
-- Email: （待补充）
-
----
-
 <p align="center">
-  ⭐ 如果这个项目对你有帮助，请给一个 Star！
+  ⭐ 如果这个方向对你有启发，请给一个 Star！<br>
+  🗂️ 让每个人的知识积累，都变成真正的资产。
 </p>
