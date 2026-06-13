@@ -10,59 +10,139 @@
 
 <p align="center">
   <b>个人知识库管理系统</b><br>
-  从碎片化文档到结构化知识，让 AI 真正理解你的资料
+  从碎片化文档到可对话的活知识库，让 AI 真正理解你的资料
 </p>
 
 <p align="center">
   <a href="#-项目愿景"><b>项目愿景</b></a> ·
-  <a href="#-当前进度"><b>当前进度</b></a> ·
-  <a href="#-路线图"><b>路线图</b></a> ·
   <a href="#-快速开始"><b>快速开始</b></a> ·
-  <a href="#-架构概览"><b>架构</b></a> ·
-  <a href="https://github.com/shiyao222333-afk/knowledge-forge/issues"><b>提Issue</b></a>
+  <a href="#-流程图"><b>流程图</b></a> ·
+  <a href="#-路线图"><b>路线图</b></a> ·
+  <a href="https://github.com/shiyao222333-afk/knowledge-forge/issues"><b>提 Issue</b></a> ·
+  <a href="https://github.com/shiyao222333-afk/knowledge-forge/blob/main/DEVELOPMENT_HISTORY.md"><b>开发历程</b></a>
 </p>
+
+---
+
+## ✨ 一句话介绍
+
+> 把你的截图、手册、笔记丢进去，问一个问题，直接得到**带来源引用的答案**。
+> 数据全在本地，不联网也能用。
+
+```bash
+# 1. 启动（首次）
+.\start.bat
+
+# 2. 摄入资料（支持图片/文本/Word/PDF）
+python kb_query.py --ocr "齿轮手册截图.jpg" --source "齿轮设计手册-P23"
+python kb_query.py --ingest "设计笔记.txt"
+
+# 3. 提问
+python kb_query.py "模数2.5的齿轮外径是多少" --answer --llm-api-key sk-xxx
+# → 生成 query_result.html，浏览器打开即可看到答案 + 原始素材来源
+```
+
+---
+
+## 📐 它解决什么问题？
+
+| 你的痛点 | KnowledgeForge 的方案 |
+|----------|--------------------------|
+| 几 GB 资料，想找一句话要翻半小时 | AI 语义搜索，直接给答案 |
+| 截图里的文字搜不到 | PaddleOCR 识别图片文字，一并入库 |
+| 表格/公式无法理解 | PPStructureV3 结构化识别，公式渲染为 LaTeX |
+| 不知道答案从哪来的 | 每个回答都标注 `[引用N]`，可点击溯源 |
+| 数据不敢上传云端 | 全本地运行，数据不出门 |
+| 传统知识库只能搜文件名 | 语义理解，跨文档综合回答 |
+
+---
+
+## 🎯 核心特性
+
+- 🔍 **语义搜索** — 不是关键词匹配，是真的理解你在问什么
+- 🖼️ **图片 OCR** — 截图、照片、扫描件，自动识别文字并入库
+- 📊 **表格精确引用** — 大表格按行拆分，引用精确到行（不只是整张表）
+- 🔗 **引用连续化** — 回答里的引用编号永远是 1、2、3... 不跳跃
+- 🧮 **公式渲染** — KaTeX 服务端渲染，LaTeX 公式正确显示
+- 📄 **HTML 报告** — 双层结构：干净回答 + 可展开的原始素材
+- 🔐 **本地优先** — 向量库和嵌入模型全在本地，隐私零泄露
+- 🔗 **IMA 联动** — 支持从 IMA 知识库同步内容（`sync_ima.py`）
+
+---
+
+## 📊 操作流程图
+
+> 完整 Mermaid 流程图（10 张图：架构、摄入、查询、引用优化、序列图）👉  
+> **[点此查看 flow_diagram.md](flow_diagram.md)**
+
+GitHub 原生渲染 Mermaid，点击上方链接即可看到全部流程图。
+
+---
+
+## 🚀 快速开始
+
+### 1. 安装依赖
+
+```bash
+# Python 包
+pip install requests fpdf2 pillow paddlepaddle paddleocr "paddlex[ocr]==3.7.0"
+
+# Ollama（本地嵌入模型）
+# 从 https://ollama.com 安装，然后拉取模型：
+ollama pull qwen3-embedding:4b
+
+# KaTeX（公式渲染，可选）
+npm install -g katex
+```
+
+### 2. 启动服务
+
+```bash
+.\start.bat   # 启动 Qdrant + Ollama（Windows）
+```
+
+### 3. 摄入你的资料
+
+```bash
+# 文本文件直接入库
+python kb_query.py --ingest "D:/Documents/齿轮设计基础.txt"
+
+# 图片 OCR 后入库（自动识别公式/表格）
+python kb_query.py --ocr "photo.jpg" --source "手册-P23"
+
+# OCR 后先预览再决定是否入库
+python kb_query.py --ocr "photo.jpg" --check-only
+```
+
+### 4. 提问！
+
+```bash
+# 端到端问答（搜索 → LLM 合成 → HTML 报告）
+python kb_query.py "齿轮的失效形式有哪些" --answer --llm-api-key sk-xxx
+# 报告保存于 query_result.html，用浏览器打开
+
+# 纯搜索（不调用 LLM，只查看相关素材）
+python kb_query.py "齿轮参数表" --top 10
+```
 
 ---
 
 ## 🧭 项目愿景
 
-> 你积累了几 GB 的技术文档、手册、笔记、截图 —— 但它们是「死资料」，找不到、用不上。
-> **KnowledgeForge（知炬）的目标：把这些碎片化资料，变成你可以对话的活知识库。**
+我们把知识库管理系统的发展分为三个阶段：
 
-### 我们不走传统知识库的老路
+```
+阶段一（当前）：个人知识库工具
+  → 摄入、搜索、问答、引用标注
 
-| 传统知识库 ❌ | KnowledgeForge ✅ |
-|--------------|--------------------------|
-| 全文搜索，靠人自己找 | AI 理解语义，直接给答案 |
-| 文档格式受限（只支持PDF） | 图片/截图/OCR/文本全支持 |
-| 搜索结果是一堆文件名 | 答案是综合的，附带来源引用 |
-| 公式/表格/图表无法理解 | 结构化识别，理解表格每一行 |
-| 数据必须上传云端 | 本地优先，数据不出门 |
-| 用完就忘，无法积累 | 每次问答都在丰富知识图谱 |
+阶段二（规划中）：知识图谱 + 多模态
+  → 自动建立知识点关联、图表理解、手写笔记
+
+阶段三（更远未来）：完全本地智能
+  → 本地 LLM、CAD 插件联动、团队协作知识库
+```
 
 **最终目标**：一个完全属于你自己的、会成长的、本地运行的知识大脑。
-
----
-
-## 🚀 当前进度（MVP 阶段）
-
-> 以下是 **已实现的基础能力**，作为后续开发的基石。当前版本定位为 **可验证核心假设的原型**。
-
-### ✅ 已实现（v0.1.0）
-
-- **文档摄入**：图片 OCR（PaddleOCR / PPStructureV3）+ 文本文件直接入库
-- **向量搜索**：Qdrant + Ollama 本地嵌入模型，语义检索
-- **引用合成**：LLM API 生成答案 + 标注来源引用 `[引用N]`
-- **引用粒度控制**：大表格按行拆分，避免引用范围过大
-- **引用编号连续化**：后处理重编号，引用不跳跃
-- **公式渲染**：KaTeX 服务端渲染，HTML 报告中原生显示公式
-- **HTML 报告**：双层结构（AI回答 + 原始素材），支持打印/分享
-- **数据清洗**：入库 SHA256 去重；搜索结果同源去重 + OCR 质量过滤
-- **IMA 知识库联动**：支持从 IMA 知识库同步内容（`sync_ima.py`）
-
-### 🔜 近期规划（v0.2 ~ v0.5）
-
-见 [路线图](#-路线图) 章节。
 
 ---
 
@@ -88,11 +168,6 @@
 - [ ] 定期重新嵌入（模型升级时）
 - [ ] 知识库版本管理（快照/回滚）
 
-### 🌟 更远未来
-- [ ] 多用户知识库（团队协作）
-- [ ] 与 CAD / 设计软件插件联动（直接在设计软件里问技术参数）
-- [ ] 本地 LLM 完整方案（完全离线运行）
-
 ---
 
 ## 🏗️ 架构概览
@@ -107,89 +182,16 @@ KnowledgeForge（分层架构）
 ├─────────────────────────────────────────────┤
 │  核心层：向量检索 · OCR · 嵌入           │
 ├─────────────────────────────────────────────┤
-│  存储层：Qdrant（向量）· 文件系统（原图）│
+│  存储层：Qdrant（向量）· 文件系统      │
 └─────────────────────────────────────────────┘
 ```
 
 **技术栈**：
 - 向量数据库：[Qdrant](https://github.com/qdrant/qdrant)
 - 嵌入模型：[Ollama](https://github.com/ollama/ollama) + `qwen3-embedding:4b`
-- OCR引擎：[PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) / PPStructureV3
-- LLM合成：OpenAI 兼容 API（默认 DeepSeek）
+- OCR 引擎：[PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) / PPStructureV3
+- LLM 合成：OpenAI 兼容 API（默认 DeepSeek）
 - 公式渲染：[KaTeX](https://github.com/KaTeX/KaTeX)
-
----
-
-## 📐 操作逻辑流程图
-
-> 完整的 Mermaid 流程图（10张图）已整理在单独文件中：
-
-- **[操作流程全图（FLOW_DIAGRAM.md）](FLOw_DIAGRAM.md)** — 含总体架构、摄入流程、查询流程、引用优化、HTML报告结构等
-
-GitHub 原生渲染 Mermaid 图，点击上方链接即可查看。
-
----
-
-## 📦 安装依赖
-
-```bash
-# Python 环境
-pip install requests fpdf2 pillow
-
-# PaddleOCR（中文 OCR）
-pip install paddlepaddle paddleocr
-
-# PPStructureV3（结构化识别，可选）
-pip install "paddlex[ocr]==3.7.0"
-
-# Ollama（嵌入模型运行环境）
-# 从 https://ollama.com 安装，然后：
-ollama pull qwen3-embedding:4b
-
-# KaTeX（公式渲染，需要 Node.js）
-npm install -g katex
-```
-
----
-
-## 🚀 快速开始
-
-### 1. 启动服务
-
-```bash
-# 启动 Qdrant + Ollama（Windows）
-.\start.bat
-```
-
-### 2. 构建你的知识库
-
-```bash
-# 摄入文本文件
-python kb_query.py --ingest "D:/Documents/KnowledgeBase/齿轮设计基础.txt"
-
-# OCR 图片（自动识别公式/表格）
-python kb_query.py --ocr "photo.jpg" --source "手册-P3"
-
-# OCR 后先审核再入库
-python kb_query.py --ocr "photo.jpg" --check-only
-```
-
-### 3. 向知识库提问
-
-```bash
-# 端到端问答（搜索 → LLM 合成 → HTML报告）
-python kb_query.py "齿轮的失效形式有哪些" --answer --llm-api-key sk-xxx
-
-# 纯搜索（不调用 LLM，查看原始素材）
-python kb_query.py "齿轮参数表" --top 10
-```
-
-### 4. 从 IMA 知识库同步（可选）
-
-```bash
-# 从已导出的 IMA 文件目录同步
-python sync_ima.py --import-dir D:\ima_exports\
-```
 
 ---
 
@@ -209,15 +211,18 @@ python sync_ima.py --import-dir D:\ima_exports\
 # 表格行数 > 4 时按行拆分引用（可调整）
 python kb_query.py "转动惯量公式" --answer --table-split-threshold 3
 
-# 搜索相关度阈值（默认 0.3）
+# 搜索相关度阈值（默认 0.3，越高越严格）
 python kb_query.py "查询词" --threshold 0.5
+
+# 限制送入 LLM 的 chunk 数量（避免超 context）
+python kb_query.py "查询词" --answer --max-chunks 8
 ```
 
 ---
 
-## 📊 输出示例
+## 📸 输出示例
 
-**（规划中：此处将添加知识库管理界面的截图和HTML报告截图）**
+**（规划中：此处将添加知识库管理界面截图和 HTML 报告截图）**
 
 当前可通过以下命令生成 HTML 报告预览：
 
@@ -252,9 +257,9 @@ MIT License - 详见 [LICENSE](LICENSE) 文件
 ## 🙏 致谢
 
 - [Qdrant](https://github.com/qdrant/qdrant) - 向量数据库
-- [Ollama](https://github.com/ollama/ollama) - 本地LLM运行环境
+- [Ollama](https://github.com/ollama/ollama) - 本地 LLM 运行环境
 - [KaTeX](https://github.com/KaTeX/KaTeX) - 公式渲染
-- [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) - 中文OCR
+- [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) - 中文 OCR
 
 ---
 
