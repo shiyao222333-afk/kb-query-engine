@@ -1,5 +1,5 @@
 """
-KnowledgeForge 分类法定义 — 中图法 / DDC / 自定义
+Athanor 分类法定义 — 中图法 / DDC / 自定义
 
 结构:
     CLASSIFICATION_SCHEMES = {

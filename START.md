@@ -1,4 +1,4 @@
-# 🚀 启动 KnowledgeForge
+# 🚀 启动 Athanor
 
 快速启动 Web UI 界面。
 

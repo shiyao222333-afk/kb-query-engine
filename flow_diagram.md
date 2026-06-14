@@ -290,7 +290,7 @@ flowchart TD
 
 ```mermaid
 graph TD
-    ROOT[knowledge-forge/]
+    ROOT[athanor/]
 
     ROOT --> KB[kb_query.py<br>主程序]
 

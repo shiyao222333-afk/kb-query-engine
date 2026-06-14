@@ -68,8 +68,8 @@ def cached_ingest_log() -> list:
 
 def render_sidebar():
     """渲染共享侧边栏：品牌 + 知识库选择器 + 系统状态。"""
-    st.markdown("## 🔥 KnowledgeForge")
-    st.markdown("##### 知炬 · 知识熔炉")
+    st.markdown("## 🏭 Athanor")
+    st.markdown("##### 熔知 · MindForge")
     st.markdown("---")
 
     # ── 知识库选择器 ──
@@ -134,8 +134,8 @@ def render_sidebar():
         pass
 
     st.markdown("---")
-    st.markdown("🔗 [GitHub](https://github.com/shiyao222333-afk/knowledge-forge)")
-    st.markdown("🔥 知炬")
+    st.markdown("🔗 [GitHub](https://github.com/shiyao222333-afk/athanor)")
+    st.markdown("🔥 熔知")
 
 
 # ═══════════════════════════════════════════

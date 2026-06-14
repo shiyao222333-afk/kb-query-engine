@@ -1,5 +1,5 @@
 """
-📹 关于 KnowledgeForge / 知炬
+📹 关于 Athanor · 熔知 / MindForge
 用于视频演示的更新日志与项目介绍页面
 """
 
@@ -8,8 +8,8 @@ import json
 from pathlib import Path
 
 st.set_page_config(
-    page_title="关于 - KnowledgeForge",
-    page_icon="📹",
+    page_title="关于 - Athanor",
+    page_icon="🏭",
     layout="wide",
 )
 
@@ -91,9 +91,9 @@ st.markdown(
 st.markdown(
     """
     <div class="about-hero">
-        <h1>🔥 KnowledgeForge / 知炬</h1>
+        <h1>🏭 Athanor · 熔知 / MindForge</h1>
         <p>个人本地知识引擎 — 把截图、手册、笔记丢进去，问一个问题，直接得到带来源引用的答案。</p>
-        <p style="margin-top: 12px; font-size: 0.9rem;">数据全在本地，不联网也能用。</p>
+        <p style="margin-top: 12px; font-size: 0.9rem; color: #8b949d;">Athanor（恒炉）是 Opue Magnum 一人公司蓝图的核心组件。</p>
     </div>
     """,
     unsafe_allow_html=True,
@@ -211,7 +211,7 @@ for step_emoji, (title, desc) in enumerate(flow_steps):
     with st.expander(f"{step_emoji} {title}"):
         st.markdown(desc)
         if step_emoji == 0:
-            st.code("cd D:\\knowledge-forge\npython -m streamlit run app.py", language="bash")
+            st.code("cd D:\\athanor\npython -m streamlit run app.py", language="bash")
         elif step_emoji == 3:
             st.caption("💡 提示：跨库搜索支持多选集合")
 
@@ -240,15 +240,15 @@ st.markdown("## 📄 开源协议 & 链接")
 link_cols = st.columns(3)
 with link_cols[0]:
     st.markdown("**项目地址**")
-    st.markdown("- [GitHub 仓库](https://github.com/shiyao222333-afk/knowledge-forge)")
-    st.markdown("- [Issue 追踪](https://github.com/shiyao222333-afk/knowledge-forge/issues)")
+    st.markdown("- [GitHub 仓库](https://github.com/shiyao222333-afk/athanor)")
+    st.markdown("- [Issue 追踪](https://github.com/shiyao222333-afk/athanor/issues)")
 with link_cols[1]:
     st.markdown("**文档**")
-    st.markdown("- [完整 README](https://github.com/shiyao222333-afk/knowledge-forge#readme)")
+    st.markdown("- [完整 README](https://github.com/shiyao222333-afk/athanor#readme)")
     st.markdown("- [启动说明](START.md)")
 with link_cols[2]:
     st.markdown("**协议**")
     st.markdown("- MIT License")
     st.markdown("- 自由使用、修改和分发")
 
-st.caption("KnowledgeForge / 知炬 · 让每个人的知识积累，都变成真正的资产。")
+st.caption("Athanor · 熔知 / MindForge · Opus Magnum 一人公司蓝图 — 让每个人的知识积累，都变成真正的资产。")

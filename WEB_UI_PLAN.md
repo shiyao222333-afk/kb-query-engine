@@ -1,4 +1,4 @@
-# KnowledgeForge Web UI — 任务清单
+# Athanor Web UI — 任务清单
 
 > 版本规划：v0.2（原型）→ v0.3（完整版）
 > 最后更新：2026-06-14
@@ -64,7 +64,7 @@
 
 ### Phase 6：打磨发布（半天）
 
-- [ ] **T6.1** 添加 Logo / 标题（`st.title("KnowledgeForge / 知炬")`）
+- [ ] **T6.1** 添加 Logo / 标题（`st.title("Athanor / 熔知")`）
 - [ ] **T6.2** 响应式布局微调
 - [ ] **T6.3** 写启动脚本 `run_ui.bat`（一键启动）
 - [ ] **T6.4** 更新 README，添加 Web UI 截图和使用说明
@@ -123,7 +123,7 @@
 ### v0.2（Streamlit）
 
 ```
-knowledge-forge/
+athanor/
 ├── app.py              # Streamlit 入口
 ├── app/
 │   ├── __init__.py
@@ -138,7 +138,7 @@ knowledge-forge/
 ### v0.3（FastAPI + HTML）
 
 ```
-knowledge-forge/
+athanor/
 ├── api.py             # FastAPI 后端
 ├── static/
 │   ├── index.html     # 前端 SPA
@@ -156,7 +156,7 @@ knowledge-forge/
 
 ```
 ┌─────────────────────────────────────────────┐
-│        KnowledgeForge / 知炬  v0.2         │
+│        Athanor / 熔知  v0.2         │
 ├──────────┬──────────────────────────────────┤
 │          │  输入框：[_______________] [发送] │
 │ 摄入管理  │                                 │
@@ -176,7 +176,7 @@ knowledge-forge/
 
 ```
 ┌────────────────────────────────────────────────────────┐
-│ [Logo] KnowledgeForge    [知识库] [对话] [设置]  [登录]│
+│ [Logo] Athanor    [知识库] [对话] [设置]  [登录]│
 ├────────────────────────────────────────────────────────┤
 │                                                        │
 │  对话界面（左侧 70%）                                  │
@@ -240,3 +240,4 @@ RAGFlow / AnythingLLM 都有 Web UI，那为什么还要自己写？
 2. **引用粒度控制**：表格行级拆分是我们独有的功能，通用 UI 不支持
 3. **轻量级**：我们不依赖 Docker，不依赖 Node.js，纯 Python 环境就能跑
 4. **可定制**：后续要加 IMA 联动、B站视频素材生成等功能，自己写的 UI 更好接入
+

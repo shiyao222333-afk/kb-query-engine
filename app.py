@@ -1,5 +1,5 @@
 """
-KnowledgeForge / 知炬 — Streamlit Web UI 主入口
+Athanor · 熔知 / MindForge — Streamlit Web UI 主入口
 Phase 3: pages/ 多文件架构 + st.navigation
 
 页面:
@@ -42,7 +42,7 @@ if os.environ.get("KB_EMBED_MODEL"):
 
 # ── 页面配置 ──
 st.set_page_config(
-    page_title="KnowledgeForge / 知炬",
+    page_title="Athanor · 熔知",
     page_icon="🔥",
     layout="wide",
     initial_sidebar_state="expanded",

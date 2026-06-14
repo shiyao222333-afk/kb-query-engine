@@ -1,6 +1,6 @@
-# KnowledgeForge 与类似工具对比
+# Athanor 与类似工具对比
 
-> 本文档详细比较 KnowledgeForge 与其他主流本地知识库/RAG工具的异同，帮助您选择最适合的工具。
+> 本文档详细比较 Athanor 与其他主流本地知识库/RAG工具的异同，帮助您选择最适合的工具。
 
 ---
 
@@ -8,7 +8,7 @@
 
 | 工具 | 类型 | 开源 | 本地部署 | 主要特点 |
 |------|------|------|----------|----------|
-| **KnowledgeForge** | 知识库管理系统 | ✅ MIT | ✅ 全本地 | 中文优化、OCR、公式渲染、引用粒度优化 |
+| **Athanor** | 知识库管理系统 | ✅ MIT | ✅ 全本地 | 中文优化、OCR、公式渲染、引用粒度优化 |
 | **RAGFlow** | RAG引擎 | ✅ Apache 2.0 | ✅ 本地/Docker | 完整RAG解决方案、多文档类型、Web UI |
 | **AnythingLLM** | 知识库聊天 | ✅ MIT | ✅ 本地/云端 | 隐私优先、多LLM支持、简单易用 |
 | **Dify** | LLM应用平台 | ✅ Apache 2.0 | ✅ 本地/云端 | 工作流、Agent、RAG、多模型 |
@@ -20,9 +20,9 @@
 
 ## 二、详细对比
 
-### 1. KnowledgeForge vs RAGFlow
+### 1. Athanor vs RAGFlow
 
-| 对比项 | KnowledgeForge | RAGFlow |
+| 对比项 | Athanor | RAGFlow |
 |--------|----------------|---------|
 | **定位** | 个人知识库管理 | 企业级RAG引擎 |
 | **部署难度** | 低（Python脚本） | 中（需要Docker） |
@@ -35,14 +35,14 @@
 | **适合场景** | 个人知识管理、技术文档 | 企业知识库、团队协作 |
 
 **选择建议**：
-- 如果你是个人用户，需要中文优化和OCR功能 → 选择 **KnowledgeForge**
+- 如果你是个人用户，需要中文优化和OCR功能 → 选择 **Athanor**
 - 如果你需要完整的Web UI和团队协作 → 选择 **RAGFlow**
 
 ---
 
-### 2. KnowledgeForge vs AnythingLLM
+### 2. Athanor vs AnythingLLM
 
-| 对比项 | KnowledgeForge | AnythingLLM |
+| 对比项 | Athanor | AnythingLLM |
 |--------|----------------|-------------|
 | **定位** | 知识库管理系统 | 本地知识库聊天 |
 | **部署难度** | 低 | 低（桌面应用） |
@@ -55,14 +55,14 @@
 | **适合场景** | 技术文档、公式多 | 通用知识库聊天 |
 
 **选择建议**：
-- 如果你需要处理技术文档、公式、表格 → 选择 **KnowledgeForge**
+- 如果你需要处理技术文档、公式、表格 → 选择 **Athanor**
 - 如果你想要简单的桌面应用，快速聊天 → 选择 **AnythingLLM**
 
 ---
 
-### 3. KnowledgeForge vs Dify
+### 3. Athanor vs Dify
 
-| 对比项 | KnowledgeForge | Dify |
+| 对比项 | Athanor | Dify |
 |--------|----------------|------|
 | **定位** | 知识库管理系统 | LLM应用平台 |
 | **部署难度** | 低 | 高（需要Docker、数据库） |
@@ -76,13 +76,13 @@
 
 **选择建议**：
 - 如果你需要构建复杂的AI应用、工作流、Agent → 选择 **Dify**
-- 如果你只需要个人知识库管理 → 选择 **KnowledgeForge**
+- 如果你只需要个人知识库管理 → 选择 **Athanor**
 
 ---
 
-### 4. KnowledgeForge vs FastGPT
+### 4. Athanor vs FastGPT
 
-| 对比项 | KnowledgeForge | FastGPT |
+| 对比项 | Athanor | FastGPT |
 |--------|----------------|--------|
 | **定位** | 知识库管理系统 | 知识库问答 |
 | **部署难度** | 低 | 中（需要Docker） |
@@ -94,14 +94,14 @@
 | **适合场景** | 技术文档、公式多 | 快速搭建问答系统 |
 
 **选择建议**：
-- 如果你需要处理技术文档、公式、表格 → 选择 **KnowledgeForge**
+- 如果你需要处理技术文档、公式、表格 → 选择 **Athanor**
 - 如果你想要快速搭建问答系统，有可视化界面 → 选择 **FastGPT**
 
 ---
 
-### 5. KnowledgeForge vs PrivateGPT
+### 5. Athanor vs PrivateGPT
 
-| 对比项 | KnowledgeForge | PrivateGPT |
+| 对比项 | Athanor | PrivateGPT |
 |--------|----------------|------------|
 | **定位** | 知识库管理系统 | 本地GPT |
 | **部署难度** | 低 | 中 |
@@ -113,12 +113,12 @@
 | **适合场景** | 技术文档、公式多 | 通用本地GPT |
 
 **选择建议**：
-- 如果你需要处理技术文档、公式、表格 → 选择 **KnowledgeForge**
+- 如果你需要处理技术文档、公式、表格 → 选择 **Athanor**
 - 如果你只需要一个本地的GPT聊天 → 选择 **PrivateGPT**
 
 ---
 
-## 三、KnowledgeForge 的独特优势
+## 三、Athanor 的独特优势
 
 ### 1. 中文技术文档优化
 - PaddleOCR 专门优化中文识别
@@ -149,7 +149,7 @@
 
 ## 四、选择建议
 
-### 选择 KnowledgeForge，如果你：
+### 选择 Athanor，如果你：
 - ✅ 需要处理中文技术文档
 - ✅ 有截图、照片等需要OCR识别
 - ✅ 文档中有大量公式和表格
@@ -172,7 +172,7 @@
 
 ## 五、功能对比矩阵
 
-| 功能 | KnowledgeForge | RAGFlow | AnythingLLM | Dify | FastGPT |
+| 功能 | Athanor | RAGFlow | AnythingLLM | Dify | FastGPT |
 |------|----------------|---------|-------------|------|--------|
 | 中文优化 | ✅ | ✅ | ✅ | ✅ | ✅ |
 | OCR识别 | ✅ | ✅ | ❌ | ❌ | ❌ |
@@ -189,7 +189,7 @@
 
 ## 六、总结
 
-**KnowledgeForge 的定位**：一个轻量级的、专注于中文技术文档的本地知识库管理系统。
+**Athanor 的定位**：一个轻量级的、专注于中文技术文档的本地知识库管理系统。
 
 **核心竞争力**：
 1. 中文技术文档优化（OCR、公式、表格）
@@ -211,6 +211,6 @@
 
 ---
 
-**如果你觉得 KnowledgeForge 的方向对你有启发，请给一个 Star！**
+**如果你觉得 Athanor 的方向对你有启发，请给一个 Star！**
 
-GitHub: https://github.com/shiyao222333-afk/knowledge-forge
+GitHub: https://github.com/shiyao222333-afk/athanor

@@ -1,1 +1,1 @@
-# config package for KnowledgeForge
+# config package for Athanor

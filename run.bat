@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================
-REM  KnowledgeForge / ZhiJu - One-Click Launcher
+REM  Athanor · 熔知 / MindForge - One-Click Launcher
 REM  Auto-start Qdrant + Streamlit Web UI
 REM ============================================================
 
@@ -16,7 +16,7 @@ set "KB_TESSDATA_PREFIX=D:\Tesseract-OCR\tessdata"
 
 echo.
 echo ==========================================
-echo   KnowledgeForge / ZhiJu
+echo   Athanor · 熔知 / MindForge
 echo ==========================================
 echo.
 
