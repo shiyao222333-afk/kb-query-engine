@@ -250,9 +250,13 @@ python run.py  # 自动杀旧进程 + 清缓存 + 启动
 当前搜索词经 Embedding 做向量匹配，分面过滤靠用户手动侧边栏选择，两者无交集。
 未来应让 LLM 解析搜索词自动生成分面过滤条件（如 "齿轮国标" → domain:["6"] + content_type:"standard"）。
 
-### FPF WLNK 原则应用于搜索排序
+### FPF 维度3：信任聚合（WLNK）→ 并入 Crucible（炼真）
 arxiv 2601.21116 论文的 WLNK（Weakest Link）原则：`R_eff = min(evidence_scores)`。
-搜索结果排序时考虑最弱证据拉低总体可信度的逻辑，不只是 `score × trust_score`。
+**已决定不放在 Athanor 中实现**，而是作为 Crucible（炼真）的核心功能：
+- 跨源矛盾检测：同一事实多个来源给出不同结论 → 标记矛盾
+- 信任聚合（WLNK）：多条证据合并时，以最弱环节为上限 → 防止虚高信心
+- Gödel t-norm（MIN）实现保守聚合：`aggregated_trust = min(evidence_1, evidence_2, ...)`
+- 五元组不变量（Invariant Quintet）：边界/单调/幂等/WLNK上界/结合性
 
 ### project_source 升级路径
 当前为普通自由文本字段。未来在「引擎配置」维护项目列表后，可升级为分面（Payload Index）。
