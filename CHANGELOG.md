@@ -14,6 +14,51 @@
 
 ---
 
+## [v0.4.1] - 2026-06-15
+
+### Added
+- ✨ 分面分类 v5.0：UDC 9 主类（国际十进分类法）替代自定义 9 域
+- ✨ temporal_nature 分面：evergreen / timeboxed / transient（基于 RMS-Ltd doc-lifecycle-metadata-spec）
+- ✨ epistemic_status 分面：unverified / substantiated / corroborated（基于 FPF arxiv 2601.21116）
+- ✨ udc_code 普通字段：LLM 自由输出 UDC 细分码 / 复合类号
+- ✨ NiceGUI SPA 迁移：FastAPI + Vue + Quasar + WebSocket 替代 Streamlit
+- ✨ auto_classify() 增强：四层管道（模板默认值 → 文件元数据 → 关键词匹配 → LLM 推断）
+- ✨ normalize_facet_values() 枚举守卫：保证 Payload Index 值合法
+- ✨ DOMAIN_MIGRATION_MAP：旧 9 域 → UDC 9 主类迁移映射
+
+### Changed
+- 🔄 domain 分面：9 大中文主题域 → UDC 9 主类（0-9）
+- 🔄 lifecycle + project_source 降级为普通字段（仍支持 filter）
+- 🔄 Payload Index：lifecycle/project_source → temporal_nature/epistemic_status
+- 🔄 auto_classify() 推理字段增加：domain/temporal_nature/epistemic_status/udc_code
+- 🔄 Web UI：Streamlit 多页面 → NiceGUI 单文件 SPA（main.py）
+- 🔄 旧 Streamlit 文件归档至 _archive/
+
+### Removed
+- ❌ objectivity 字段（被 content_type + epistemic_status 联合覆盖）
+- ❌ project_source 硬编码 5 项选项（改为自由文本）
+
+---
+
+## [v0.4.0] - 2026-06-15
+
+### Added
+- ✨ LLM 自动分类：auto_classify(text) 推断 content_type/domain/keywords/trust_score 等
+- ✨ 两阶段摄入管线：内容确认 → AI 分析 + 微调 → 入库
+- ✨ 共享表单组件：utils/ingest_ui.py，三 Tab 统一调用（消减 ~200 行重复代码）
+- ✨ AI 分析结果可视化：5 列度量卡片（内容类型/主题域/关键词/可信度/生命周期）
+- ✨ 智能默认值：手动输入默认 content_type=idea，文件/OCR 默认 knowledge
+
+### Changed
+- 🔄 文档注入页面重构：660 行 → ~240 行
+- 🔄 三 Tab 表单去重：共享 render_facet_form() + build_facet_metadata()
+- 🔄 auto_classify() 字段合法性校验 + 默认值回退
+
+### Fixed
+- 🐛 手动输入/OCR/Alembic 推送内容无本地源文件时 source_path 处理
+
+---
+
 ## [v0.3.0] - 2026-06-15
 
 ### Added
