@@ -25,8 +25,7 @@
 
 <p align="center">
   <a href="#-为什么需要-athanor"><b>🤔 为什么需要</b></a> ·
-  <a href="#-核心亮点"><b>✨ 核心亮点</b></a> ·
-  <a href="#-竞品对比"><b>🆚 竞品对比</b></a> ·
+  <a href="#-核心能力--竞品对比"><b>✨ 核心能力 & 竞品对比</b></a> ·
   <a href="#-操作流程"><b>🔄 操作流程</b></a> ·
   <a href="#-架构概览"><b>🏗️ 架构概览</b></a> ·
   <a href="#-路线图"><b>🗺️ 路线图</b></a> ·
@@ -78,48 +77,127 @@ python run.py
 
 ---
 
-## ✨ 核心亮点
+## ✨ 核心能力 & 竞品对比
 
-Athanor 的核心差异化能力，按三大功能域组织：
-
-### 📥 摄入 — 不只是上传文件，是理解文件
-
-| # | 亮点 | 一句话说明 |
-|---|------|-----------|
-| 1 | **两阶段摄入管线 + LLM 自动分类** | 先确认内容再 AI 分析，LLM 通过四层管道（模板→元数据→关键词→LLM推断）自动推断分面字段，用户只需确认或微调。 [→ FPF 认知层级 (arxiv 2601.21116)](docs/schema.md#分面4认知验证状态-epistemic_status必填) |
-| 2 | **8 格式智能检测 + 三档置信度路由** | 自动识别 EPUB/PDF/DOCX/PPTX/HTML/SRT 等格式并提取元数据；AI 分析结果按置信度三档路由：≥0.8 直通入库、0.5-0.8 入库标记审查、<0.5 进入审核队列不污染知识库。 [→ chardet 编码自检链](PROJECT_PLAN.md#v045-计划--智能摄入深化-) |
-| 3 | **OCR 深度优化 + 死信队列** | PaddleOCR + PPStructureV3 识别中英文/表格/公式，LLM 二次纠错 OCR 错别字；解析失败的文件进入 Dead Letter Queue 保留现场，不影响知识库纯净度。 [→ PaddleOCR + PPStructureV3](https://github.com/PaddlePaddle/PaddleOCR) |
-
-### 🔍 搜索 — 不是关键词匹配，是精确溯源
-
-| # | 亮点 | 一句话说明 |
-|---|------|-----------|
-| 4 | **表格行级拆分 + 连续引用编号** | 大表格按行切块，每行独立检索，引用精确到单元格；`[引用1][引用2]` 连续不跳跃，点击直达原文位置。 |
-| 5 | **KaTeX 服务端公式渲染** | PPStructureV3 识别公式结构 → KaTeX 服务端渲染为矢量图 → 搜索结果中嵌入可缩放公式，杜绝模糊。 [→ KaTeX](https://github.com/KaTeX/KaTeX) |
-
-### 🗂️ 知识组织 — 不是文件夹，是结构化认知
-
-| # | 亮点 | 一句话说明 |
-|---|------|-----------|
-| 6 | **分面分类 v5.0** | 基于 UDC 国际十进分类法 + FPF 认知层级理论，4 维度精确标注每条知识：content_type (15种) × domain (UDC 9主类) × temporal_nature (3级时效) × epistemic_status (L0-L2 验证层级)。 [→ UDC 国际十进分类法](https://www.udcsummary.info/) · [→ FPF (arxiv 2601.21116)](docs/schema.md#分面4认知验证状态-epistemic_status必填) |
-| 7 | **全本地运行** | Qdrant 向量库 + Ollama 本地嵌入模型 (qwen3-embedding:4b) + 可选本地 LLM，数据不出机器，隐私零风险。可完全离线运行（需本地 LLM）。 |
-| 8 | **NiceGUI SPA 单页应用** | FastAPI + Vue + Quasar + WebSocket，毫秒级页面切换，纯 Python 全栈开发，零前端依赖。 [→ NiceGUI](https://nicegui.io/) |
-
-> 📘 各类亮点的学术/技术依据详见 [docs/schema.md](docs/schema.md)（字段设计）、[PROJECT_PLAN.md](PROJECT_PLAN.md)（版本路线图）、[CHANGELOG.md](CHANGELOG.md)（变更日志）。
+> 以下逐一分析 Athanor 的核心能力与同类工具的实现差异。每个功能点都从「Athanor 怎么做」「竞品怎么解决」「差异在哪」三个角度展开。
 
 ---
 
-## 🆚 竞品对比
+### 📥 摄入 — 不只是上传文件，是理解文件
 
-Athanor 与主流本地知识库/RAG 工具的功能逐一对比：
+#### 🖼️ 中文 OCR + 公式 + 表格识别
+
+**Athanor** 使用 PaddleOCR + PPStructureV3 进行版面分析，不仅识别文字，还能区分表格结构和公式区域，再用 LLM 对 OCR 易错字进行二次纠错（如「模数」→「模数」）。
+
+**RAGFlow** 同样有强大的文档解析能力——DeepDoc 引擎使用 ONNX 版面分析模型 + pdfplumber 混合 OCR，表格识别用 TableStructureRecognizer 输出 HTML。定位相似，但侧重点不同：RAGFlow 面向企业级 PDF 批处理，Athanor 更聚焦个人混合素材（截图、扫描件、EPUB）的深度理解。
+
+**FastGPT / Dify / AnythingLLM** 均无内置 OCR 或公式识别能力。Dify 依赖用户在工作流中自行编排外部提取步骤；FastGPT 仅支持纯文本文档分段。
+
+> 💡 **差异**：Athanor 是同级工具中唯一将 OCR→LLM纠错→结构化提取→可靠摄入作为一条**自动化闭环**的，而不是让用户自己想办法处理。
+
+---
+
+#### 🤖 LLM 自动分类 — 四层推断管道
+
+**Athanor** 摄入时不只是分块存向量，而是用 LLM 通过四层管道（模板默认值 → 文件元数据 → 关键词匹配 → LLM 兜底推断）自动推断每条知识的分面字段：content_type（15种）、domain（UDC 9主类）、temporal_nature（3级时效）、epistemic_status（L0-L2 验证层级）。用户只需确认或微调。 [→ FPF 认知层级 (arxiv 2601.21116)](docs/schema.md#分面4认知验证状态-epistemic_status必填)
+
+**所有竞品均无此功能。** RAGFlow 的分块仅附带坐标标签，不做内容分类；Dify 的知识流水线由用户手动编排节点，没有自动推断；FastGPT 的 QA 模式用 LLM 生成问答对但不做分类；AnythingLLM 按工作区文件夹手动组织。
+
+> 💡 **差异**：竞品的思路是「用户自己分类」，Athanor 是「AI 自动分类 + 用户审核」——从手动归档直接跳到半自动认知标注。
+
+---
+
+#### 📄 多格式智能检测 + 编码自检
+
+**Athanor** 支持 8 种核心格式自动识别（EPUB/PDF/DOCX/PPTX/HTML/SRT/TXT/MD），通过扩展名 + 内容头 4 字节双重验证，并用 chardet 实现 UTF-8 → GBK → latin-1 编码兜底链，解决中文乱码痛点。 [→ 格式分层设计](PROJECT_PLAN.md#v045-计划--智能摄入深化-)
+
+**RAGFlow / Dify** 同样支持多格式，走的是通用文档解析路线——RAGFlow 有 7 种解析器可选（DeepDoc/MinerU/Docling/PaddleOCR 等），Dify 通过知识流水线节点处理。但它们的格式检测是通用型的，不做元数据自动提取。
+
+**FastGPT / AnythingLLM** 依赖基础的文本提取库，对 EPUB 等格式不友好，无编码自检。
+
+> 💡 **差异**：Athanor 的格式检测不是为了「能读就行」，而是为了「读到能用」——EPUB 提取 Dublin Core 标题作者、PDF 提取 Document Info、HTML 提取 meta，省去手填元数据的步骤。
+
+---
+
+#### 🎯 置信度路由 + 死信队列
+
+**Athanor** 设计了三档置信度路由机制：AI 分析置信度 ≥0.8 直接入库，0.5-0.8 入库但标记 `needs_review`，<0.5 进入审核队列不污染知识库。同时失败文件进入 Dead Letter Queue 保留现场，供人工检查。 [→ 置信度计算设计](PROJECT_PLAN.md#v045-计划--智能摄入深化-)
+
+**所有竞品均无此机制。** RAGFlow、Dify、FastGPT 的摄入都是「全有或全无」——解析成功就入库，失败就报错丢弃，没有中间态。这在个人场景下尤其危险：用户不知道哪些内容被静默丢弃了。
+
+> 💡 **差异**：这是 Athanor 在**个人知识管理场景**下的核心差异化设计——宁可不进，不要错进。面向企业批量处理的 RAG 引擎不需要这种粒度，因为它们假设输入是标准化的。
+
+---
+
+### 🔍 搜索 — 不只是向量匹配，是精确溯源
+
+#### 📊 表格行级拆分 + 连续引用编号
+
+**Athanor** 将大表格按**行**切分成独立检索单元，每行保留表头上下文。LLM 合成回答时引用精确到单元格，且 `[引用1][引用2]` 编号连续不跳跃，点击直达原文对应位置。
+
+**竞品的 chunking 策略**都做不到这个粒度：
+- **RAGFlow** 按 token 数（默认 512）切分，一份 3 页的表格可能被切成 2 个 chunk，检索时只能返回整块
+- **Dify** 的父子分块模式（Parent-child）用大块做上下文、小块做检索，但不针对表格做行级拆分
+- **FastGPT** 按分隔符 + 最大 token 数拆分，不识别表格结构
+- **AnythingLLM** 的基础文本切分完全不考虑文档结构
+
+> 💡 **差异**：竞品的思路是「切碎 → 拼回去」，Athanor 是「按语义单元切 → 精确索引」——表格不是文本块，是结构化数据。
+
+---
+
+#### 📐 KaTeX 服务端公式渲染
+
+**Athanor** 用 PPStructureV3 识别公式区域 → LaTeX 转换 → KaTeX 服务端渲染为矢量 SVG，搜索结果中直接嵌入可缩放公式。
+
+**RAGFlow** 对公式的支持不确定（当前文档未提及专门的公式识别流程，可能作为 figure 类型处理）。其他竞品均不处理公式——搜索「E=mc²」和搜索「能量质量关系」在它们的索引中没有区别。
+
+> 💡 **差异**：对数学/工程类用户来说，公式是可检索的第一等公民，不是「图片附件」。Athanor 是同级工具中唯一在搜索链路中完整处理公式的。
+
+---
+
+### 🗂️ 知识组织 — 不是文件夹，是结构化认知
+
+#### 🏷️ 分面分类 v5.0 (UDC + FPF)
+
+**Athanor** 基于国际十进分类法（UDC）和 FPF 第一性原理框架，用 4 个维度精确标注每条知识：content_type（15 种） × domain（UDC 9 主类） × temporal_nature（3 级时效：evergreen/timeboxed/transient） × epistemic_status（L0 猜想 / L1 逻辑验证 / L2 实证验证）。每个维度都做了 Payload Index，支持组合过滤。 [→ UDC](https://www.udcsummary.info/) · [→ FPF (arxiv 2601.21116)](docs/schema.md)
+
+**竞品均使用扁平分类**：
+- **RAGFlow / FastGPT / AnythingLLM**：知识库 → 数据集 → 标签，本质是文件夹 + 标签的二维组织
+- **Dify**：知识库 + 元数据字段（可自定义），但需手动维护，无自动推断
+
+没有竞品区分「这是一条数学定理（evergreen/corroborated）」和「这是一条行业新闻（transient/unverified）」。
+
+> 💡 **差异**：竞品的分类是「给文件打标签」，Athanor 是「给知识做体检」——你知道它是什么类型、多可靠、会过时吗。
+
+---
+
+#### 🔗 认知验证层级 + 通用关系
+
+**Athanor** 记录每条知识的验证状态（L0 猜想 → L1 逻辑自洽 → L2 有外部实证），并支持 8 种关系类型（similar / references / contradicts / derived_from / merged_into / supersedes / depends_on），可以在知识之间建立引用链和矛盾链。 [→ 关系字段设计](docs/schema.md#知识管理字段8)
+
+**Dify** 在工作流层面有关联能力（节点间数据流转），但不作用于知识条目之间。其余竞品均无条目间关系管理。
+
+> 💡 **差异**：Athanor 不只是「搜索出一堆相关片段」，而是帮你理解「这些知识之间是什么关系」——谁引用了谁、谁和谁矛盾、哪个版本替代了哪个。
+
+---
+
+#### 🏠 全本地运行 + NiceGUI SPA
+
+**Athanor** 从向量库到嵌入模型全部本地运行：Qdrant 本地存储 + Ollama 本地嵌入（qwen3-embedding:4b）+ 可选本地 LLM，数据不出机器。Web 界面用 NiceGUI（FastAPI + Vue + Quasar + WebSocket）构建 SPA，纯 Python 全栈，pip install 即可运行。
+
+**竞品也都支持本地部署**，但部署复杂度和定位不同——RAGFlow 和 Dify 需要 Docker + 多个服务，定位企业级；AnythingLLM 同样简单但功能偏基础；FastGPT 需要 Docker + MongoDB + PG。
+
+---
+
+### 📊 功能对比总览
 
 | 功能维度 | Athanor | RAGFlow<br><sub>37k⭐</sub> | AnythingLLM<br><sub>30k⭐</sub> | Dify<br><sub>60k⭐</sub> | FastGPT<br><sub>20k⭐</sub> |
 |----------|:-------:|:-------:|:-------:|:----:|:-------:|
 | **摄入** | | | | | |
-| OCR 中文识别 | ✅ PaddleOCR | ✅ | ❌ | ❌ | ❌ |
+| 中文 OCR | ✅ PPStructureV3 | ✅ DeepDoc | ❌ | ❌ | ❌ |
 | 公式识别+渲染 | ✅ KaTeX | ✅ | ❌ | ❌ | ❌ |
 | LLM 自动分类 | ✅ 四层管道 | ❌ | ❌ | ❌ | ❌ |
-| 多格式检测 | ✅ 8种 | ✅ | ✅ | ✅ | ✅ |
+| 多格式检测 | ✅ 8种+元数据 | ✅ 7种解析器 | ✅ | ✅ 流水线 | ✅ |
 | 置信度路由 | ✅ 三档 | ❌ | ❌ | ❌ | ❌ |
 | 死信队列 | ✅ | ❌ | ❌ | ❌ | ❌ |
 | **搜索** | | | | | |
@@ -127,20 +205,24 @@ Athanor 与主流本地知识库/RAG 工具的功能逐一对比：
 | 连续引用编号 | ✅ | ❌ | ❌ | ❌ | ❌ |
 | 引用点击溯源 | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **知识组织** | | | | | |
-| 分面分类 | ✅ v5.0 | ❌ | ❌ | ❌ | ❌ |
+| 分面分类 | ✅ 4维 | ❌ 扁平标签 | ❌ 工作区 | ❌ 元数据字段 | ❌ 数据集 |
 | 认知验证层级 | ✅ L0-L2 | ❌ | ❌ | ❌ | ❌ |
-| 通用关系字段 | ✅ 8种关系 | ❌ | ❌ | ❌ | ❌ |
+| 通用关系字段 | ✅ 8种 | ❌ | ❌ | ❌ | ❌ |
 | **架构** | | | | | |
-| 全本地运行 | ✅ | ✅ | ✅ | ✅ | ✅ |
-| SPA Web UI | ✅ NiceGUI | ✅ | ✅ | ✅ | ✅ |
-| 部署难度 | 低 (pip) | 中 (Docker) | 低 | 高 (Docker+DB) | 中 (Docker) |
+| 本地运行 | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 部署方式 | pip install | Docker | Desktop/Docker | Docker+DBS | Docker+DBS |
 | 开源协议 | MIT | Apache 2.0 | MIT | Apache 2.0 | MIT |
 
-> **选择建议**：
-> - 需要处理**中文技术文档、公式、表格**，且要求**精细分类和溯源** → **Athanor**
-> - 需要企业级 RAG 引擎 + 完整 Web UI → RAGFlow / Dify
-> - 需要简单桌面应用快速聊天 → AnythingLLM
-> - 需要快速搭建知识库问答系统 → FastGPT
+> 📘 各类亮点的学术/技术依据详见 [docs/schema.md](docs/schema.md)（字段设计）、[PROJECT_PLAN.md](PROJECT_PLAN.md)（版本路线图）、[CHANGELOG.md](CHANGELOG.md)（变更日志）。
+
+### 🧭 选择建议
+
+| 你的场景 | 推荐工具 |
+|----------|---------|
+| 中文技术文档/公式/表格，需要**精细分类和溯源** | **Athanor** |
+| 企业级 RAG 引擎，团队协作，完整 Web 管理后台 | RAGFlow / Dify |
+| 简单桌面应用，快速聊天，零配置 | AnythingLLM |
+| 快速搭建知识库问答系统，开箱即用 | FastGPT |
 
 ---
 
@@ -404,69 +486,152 @@ python run.py
 
 ---
 
-## ✨ Core Highlights
+## ✨ Core Capabilities & Comparison
 
-Athanor's key differentiators, organized by functional domain:
-
-### 📥 Ingestion — Not just uploading files, but understanding them
-
-| # | Highlight | One-liner |
-|---|-----------|-----------|
-| 1 | **Two-phase ingestion + LLM auto-classification** | Confirm content first, then AI analyzes it. LLM infers facet fields through a 4-layer pipeline (template → metadata → keyword → LLM inference). Users only need to confirm or tweak. [→ FPF Epistemic Levels (arxiv 2601.21116)](docs/schema.md) |
-| 2 | **8-format smart detection + 3-tier confidence routing** | Auto-detect EPUB/PDF/DOCX/PPTX/HTML/SRT and extract metadata. AI results routed by confidence: ≥0.8 straight to DB; 0.5–0.8 stored with review flag; <0.5 goes to review queue — never pollutes the knowledge base. [→ chardet encoding chain](PROJECT_PLAN.md) |
-| 3 | **Deep OCR optimization + Dead Letter Queue** | PaddleOCR + PPStructureV3 for Chinese/English/tables/formulas. LLM post-corrects OCR typos. Failed parses enter the Dead Letter Queue for inspection without contaminating the KB. [→ PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) |
-
-### 🔍 Search — Not keyword matching, but precise provenance
-
-| # | Highlight | One-liner |
-|---|-----------|-----------|
-| 4 | **Row-level table splitting + consecutive citation numbering** | Large tables split by row for independent retrieval, citations precise to the cell. `[ref1][ref2]` numbered consecutively without gaps, clickable to source. |
-| 5 | **KaTeX server-side formula rendering** | PPStructureV3 extracts formula structure → KaTeX server-renders as vector graphics → embeddable, scalable formulas in search results. [→ KaTeX](https://github.com/KaTeX/KaTeX) |
-
-### 🗂️ Knowledge Organization — Not folders, but structured cognition
-
-| # | Highlight | One-liner |
-|---|-----------|-----------|
-| 6 | **Faceted Classification v5.0** | Based on UDC (Universal Decimal Classification) + FPF epistemic hierarchy. 4 dimensions per entry: content_type (15 types) × domain (UDC 9 main classes) × temporal_nature (3 tiers) × epistemic_status (L0–L2 verification levels). [→ UDC](https://www.udcsummary.info/) · [→ FPF (arxiv 2601.21116)](docs/schema.md) |
-| 7 | **Fully local execution** | Qdrant vector DB + Ollama local embeddings (qwen3-embedding:4b) + optional local LLM. Data never leaves your machine. Can run completely offline. |
-| 8 | **NiceGUI SPA** | FastAPI + Vue + Quasar + WebSocket. Instant page switches, pure Python full-stack, zero frontend dependencies. [→ NiceGUI](https://nicegui.io/) |
-
-> 📘 See [docs/schema.md](docs/schema.md) (field design), [PROJECT_PLAN.md](PROJECT_PLAN.md) (roadmap), and [CHANGELOG.md](CHANGELOG.md) (changelog) for academic and technical references.
+> Below is a detailed analysis of Athanor's core capabilities and how each compares to similar tools. Every feature is examined from three angles: "What Athanor does," "How competitors handle it," and "What makes Athanor different."
 
 ---
 
-## 🆚 Feature Comparison
+### 📥 Ingestion — Not just uploading, but understanding
 
-Feature-by-feature comparison with major local KB / RAG tools:
+#### 🖼️ Chinese OCR + Formula + Table Recognition
 
-| Feature | Athanor | RAGFlow<br><sub>37k⭐</sub> | AnythingLLM<br><sub>30k⭐</sub> | Dify<br><sub>60k⭐</sub> | FastGPT<br><sub>20k⭐</sub> |
-|---------|:-------:|:-------:|:-------:|:----:|:-------:|
+**Athanor** uses PaddleOCR + PPStructureV3 for layout analysis — recognizing text, table structures, and formula regions — then applies LLM post-correction for OCR-prone characters (e.g., confusing visually-similar Chinese characters).
+
+**RAGFlow** has comparably strong document parsing — its DeepDoc engine uses ONNX layout recognition models + pdfplumber hybrid OCR, with TableStructureRecognizer outputting HTML tables. Similar positioning, different focus: RAGFlow targets enterprise PDF batch processing; Athanor targets personal mixed media (screenshots, scans, EPUBs) with deeper understanding.
+
+**FastGPT / Dify / AnythingLLM** have no built-in OCR or formula recognition. Dify relies on users composing external steps in workflows; FastGPT only handles plain text documents.
+
+> 💡 **Differentiator**: Athanor is the only tool in this space that closes the loop — OCR → LLM correction → structured extraction → reliable ingestion — as an automated pipeline, rather than leaving users to figure out processing themselves.
+
+---
+
+#### 🤖 LLM Auto-Classification — 4-Layer Inference Pipeline
+
+**Athanor** doesn't just chunk and store vectors — it uses LLM inference through a 4-layer pipeline (template defaults → file metadata → keyword matching → LLM fallback) to automatically classify each entry's facet fields: content_type (15 types), domain (UDC 9 main classes), temporal_nature (3 tiers), epistemic_status (L0–L2 verification). Users only need to confirm or tweak. [→ FPF Epistemic Levels (arxiv 2601.21116)](docs/schema.md)
+
+**No competitor has this.** RAGFlow's chunks only carry coordinate tags without content classification. Dify's knowledge pipeline requires users to manually configure processing nodes — no automatic inference. FastGPT's QA mode uses LLM to generate Q&A pairs but doesn't classify. AnythingLLM organizes by workspace folders manually.
+
+> 💡 **Differentiator**: Competitors' philosophy is "users classify manually." Athanor's is "AI auto-classifies, user audits" — a leap from manual filing to semi-automated cognitive annotation.
+
+---
+
+#### 📄 Multi-Format Smart Detection + Encoding Chain
+
+**Athanor** auto-detects 8 core formats (EPUB/PDF/DOCX/PPTX/HTML/SRT/TXT/MD) via extension + 4-byte header verification, with a chardet-based encoding fallback chain (UTF-8 → GBK → latin-1) to solve Chinese character corruption. [→ Format tier design](PROJECT_PLAN.md)
+
+**RAGFlow / Dify** also support multiple formats through generic parsers — 7 parser options in RAGFlow (DeepDoc/MinerU/Docling/PaddleOCR, etc.), Dify via pipeline nodes. But their detection is generic without automatic metadata extraction.
+
+**FastGPT / AnythingLLM** rely on basic text extraction libraries, poor EPUB support, no encoding self-check.
+
+> 💡 **Differentiator**: Athanor's format detection isn't about "can we read it" — it's about "can we use it immediately" — EPUB Dublin Core title/author, PDF Document Info, HTML meta extraction, eliminating manual metadata entry.
+
+---
+
+#### 🎯 Confidence Routing + Dead Letter Queue
+
+**Athanor** implements 3-tier confidence routing: AI confidence ≥0.8 → direct ingestion; 0.5–0.8 → store with `needs_review` flag; <0.5 → review queue, never pollutes the KB. Failed parses enter the Dead Letter Queue for inspection. [→ Confidence design](PROJECT_PLAN.md)
+
+**No competitor has this mechanism.** RAGFlow, Dify, and FastGPT all use all-or-nothing ingestion — success = store, failure = discard with error, no middle ground. This is especially dangerous for personal use: users don't know what was silently dropped.
+
+> 💡 **Differentiator**: This is Athanor's key differentiator for **personal knowledge management** — "better to not store than to store wrong." Enterprise RAG engines don't need this granularity because they assume standardized input.
+
+---
+
+### 🔍 Search — Not vector matching, but precise provenance
+
+#### 📊 Row-Level Table Splitting + Consecutive Citations
+
+**Athanor** splits large tables by **row** into independent search units, each preserving header context. LLM synthesis cites precise to the cell, with `[ref1][ref2]` numbered consecutively without gaps, clickable to source.
+
+**Competitors' chunking strategies** can't achieve this granularity:
+- **RAGFlow** chunks by token count (default 512). A 3-page table may span 2 chunks; retrieval returns whole blocks.
+- **Dify's** Parent-child mode uses large chunks for context + small chunks for retrieval, but doesn't split tables by row.
+- **FastGPT** splits by delimiter + max token count, ignoring table structure.
+- **AnythingLLM's** basic text splitting completely ignores document structure.
+
+> 💡 **Differentiator**: Competitors think "split → reassemble." Athanor thinks "split by semantic unit → index precisely." Tables are structured data, not text blobs.
+
+---
+
+#### 📐 KaTeX Server-Side Formula Rendering
+
+**Athanor** uses PPStructureV3 to detect formula regions → LaTeX conversion → KaTeX server-side rendering as vector SVG, embedded directly in search results.
+
+**RAGFlow** may handle formulas as figure types (not yet documented as a dedicated pipeline). Other competitors don't process formulas at all — searching "E=mc²" and "mass-energy equivalence" are indistinguishable in their indexes.
+
+> 💡 **Differentiator**: For math/engineering users, formulas are first-class searchable citizens, not "image attachments." Athanor is the only tool here that handles formulas end-to-end in the search pipeline.
+
+---
+
+### 🗂️ Knowledge Organization — Not folders, but structured cognition
+
+#### 🏷️ Faceted Classification v5.0 (UDC + FPF)
+
+**Athanor** uses the Universal Decimal Classification (UDC) and FPF First-Principles Framework to label every entry across 4 dimensions: content_type (15 types) × domain (UDC 9 main classes) × temporal_nature (evergreen/timeboxed/transient) × epistemic_status (L0 conjecture / L1 logically verified / L2 empirically corroborated). Every dimension has a Payload Index for combinatorial filtering. [→ UDC](https://www.udcsummary.info/) · [→ FPF (arxiv 2601.21116)](docs/schema.md)
+
+**Competitors all use flat classification:**
+- **RAGFlow / FastGPT / AnythingLLM**: KB → dataset → tags, essentially folder + label 2D organization
+- **Dify**: KB + custom metadata fields, but require manual maintenance, no automatic inference
+
+No competitor distinguishes "this is a math theorem (evergreen/corroborated)" from "this is industry news (transient/unverified)."
+
+> 💡 **Differentiator**: Competitors "tag files." Athanor "examines knowledge" — you know what type it is, how reliable, and whether it expires.
+
+---
+
+#### 🔗 Epistemic Verification + Universal Relations
+
+**Athanor** tracks each entry's verification status (L0 conjecture → L1 logically sound → L2 empirically backed) and supports 8 relation types (similar / references / contradicts / derived_from / merged_into / supersedes / depends_on), building citation chains and contradiction chains between entries. [→ Relation field design](docs/schema.md)
+
+**Dify** has workflow-level connections (data flows between nodes) but they don't apply between knowledge entries. Other competitors lack inter-entry relation management entirely.
+
+> 💡 **Differentiator**: Athanor doesn't just "find related snippets" — it helps you understand "how are these pieces of knowledge related" — who cites whom, what contradicts what, which version supersedes which.
+
+---
+
+#### 🏠 Fully Local + NiceGUI SPA
+
+**Athanor** runs everything locally: Qdrant local storage + Ollama local embeddings (qwen3-embedding:4b) + optional local LLM. Data never leaves your machine. The web UI is a NiceGUI SPA (FastAPI + Vue + Quasar + WebSocket), pure Python full-stack, just pip install.
+
+**All competitors also support local deployment**, but differ in complexity and positioning — RAGFlow and Dify need Docker + multiple services, enterprise-focused; AnythingLLM is similarly simple but feature-basic; FastGPT needs Docker + MongoDB + PostgreSQL.
+
+---
+
+### 📊 Feature Comparison Summary
+
+| Capability | Athanor | RAGFlow<br><sub>37k⭐</sub> | AnythingLLM<br><sub>30k⭐</sub> | Dify<br><sub>60k⭐</sub> | FastGPT<br><sub>20k⭐</sub> |
+|------------|:-------:|:-------:|:-------:|:----:|:-------:|
 | **Ingestion** | | | | | |
-| Chinese OCR | ✅ PaddleOCR | ✅ | ❌ | ❌ | ❌ |
+| Chinese OCR | ✅ PPStructureV3 | ✅ DeepDoc | ❌ | ❌ | ❌ |
 | Formula recognition + rendering | ✅ KaTeX | ✅ | ❌ | ❌ | ❌ |
-| LLM auto-classification | ✅ 4-layer pipeline | ❌ | ❌ | ❌ | ❌ |
-| Multi-format detection | ✅ 8 formats | ✅ | ✅ | ✅ | ✅ |
+| LLM auto-classification | ✅ 4-layer | ❌ | ❌ | ❌ | ❌ |
+| Multi-format detection | ✅ 8 + metadata | ✅ 7 parsers | ✅ | ✅ Pipeline | ✅ |
 | Confidence routing | ✅ 3-tier | ❌ | ❌ | ❌ | ❌ |
 | Dead Letter Queue | ✅ | ❌ | ❌ | ❌ | ❌ |
 | **Search** | | | | | |
 | Row-level table splitting | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Consecutive citation numbering | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Clickable citation traceability | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Knowledge Organization** | | | | | |
-| Faceted classification | ✅ v5.0 | ❌ | ❌ | ❌ | ❌ |
-| Epistemic verification levels | ✅ L0–L2 | ❌ | ❌ | ❌ | ❌ |
-| Universal relation fields | ✅ 8 types | ❌ | ❌ | ❌ | ❌ |
+| Consecutive citations | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Clickable provenance | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Knowledge Org** | | | | | |
+| Faceted classification | ✅ 4D | ❌ Flat tags | ❌ Workspaces | ❌ Metadata | ❌ Datasets |
+| Epistemic verification | ✅ L0–L2 | ❌ | ❌ | ❌ | ❌ |
+| Universal relations | ✅ 8 types | ❌ | ❌ | ❌ | ❌ |
 | **Architecture** | | | | | |
 | Fully local | ✅ | ✅ | ✅ | ✅ | ✅ |
-| SPA Web UI | ✅ NiceGUI | ✅ | ✅ | ✅ | ✅ |
-| Deployment complexity | Low (pip) | Medium (Docker) | Low | High (Docker+DB) | Medium (Docker) |
+| Deployment | pip install | Docker | Desktop/Docker | Docker+DBS | Docker+DBS |
 | License | MIT | Apache 2.0 | MIT | Apache 2.0 | MIT |
 
-> **Recommendation**:
-> - Need **Chinese technical docs, formulas, tables** with **fine-grained classification and provenance** → **Athanor**
-> - Need enterprise RAG engine + full Web UI → RAGFlow / Dify
-> - Need simple desktop chat app → AnythingLLM
-> - Need quick KB Q&A setup → FastGPT
+> 📘 See [docs/schema.md](docs/schema.md) (field design), [PROJECT_PLAN.md](PROJECT_PLAN.md) (roadmap), and [CHANGELOG.md](CHANGELOG.md) (changelog) for academic and technical references.
+
+### 🧭 Recommendation Guide
+
+| Your Scenario | Recommended Tool |
+|---------------|-----------------|
+| Chinese technical docs, formulas, tables; need **fine-grained classification and provenance** | **Athanor** |
+| Enterprise RAG engine, team collaboration, full admin Web UI | RAGFlow / Dify |
+| Simple desktop app, quick chat, zero config | AnythingLLM |
+| Quick KB Q&A setup, out of the box | FastGPT |
 
 ---
 
