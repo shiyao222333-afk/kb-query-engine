@@ -5,6 +5,7 @@
 
 import streamlit as st
 import os
+import time
 import requests
 
 # ── 确保 kb_query 可导入 ──
@@ -70,6 +71,10 @@ def render_sidebar():
     """渲染共享侧边栏：品牌 + 知识库选择器 + 系统状态。"""
     st.markdown("## 🏭 Athanor")
     st.markdown("##### 熔知 · MindForge")
+    st.caption(
+        "个人本地知识引擎 — 把截图、手册、笔记丢进去，"
+        "问一个问题，直接得到带来源引用的答案。"
+    )
     st.markdown("---")
 
     # ── 知识库选择器 ──
@@ -135,6 +140,16 @@ def render_sidebar():
 
     st.markdown("---")
     st.markdown("🔗 [GitHub](https://github.com/shiyao222333-afk/athanor)")
+
+    # ── 关闭按钮 ──
+    col1, col2 = st.columns([3, 1])
+    with col2:
+        if st.button("⏻ 关机", key="sidebar_shutdown", help="关闭 Athanor 服务"):
+            import os
+            st.toast("正在关闭 Athanor...", icon="🔄")
+            time.sleep(0.3)
+            os._exit(0)
+
     st.markdown("🔥 熔知")
 
 

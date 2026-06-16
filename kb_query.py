@@ -1,6 +1,6 @@
 """
 KB Query Engine - 中文技术文档知识库问答系统
-版本: v0.4.0 — 智能摄入 + LLM 自动分类
+版本: v0.4.1 — 分面分类 v5.0 (UDC + temporal_nature + epistemic_status)
 
 架构:
   摄入: 图片/文本 → PaddleOCR/PPStructureV3 → 分块嵌入 → Qdrant
@@ -43,7 +43,7 @@ import uuid
 from datetime import datetime, timezone
 import tempfile
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 
 try:
     from fpdf import FPDF
@@ -1152,8 +1152,12 @@ def ingest(
     # ── 分面字段 ──
     content_type   = base_meta.get("content_type", "knowledge")
     domain         = base_meta.get("domain", [])
+    temporal_nature = base_meta.get("temporal_nature", "timeboxed")
+    epistemic_status = base_meta.get("epistemic_status", "unverified")
+
+    # ── 生命周期（普通字段）──
     lifecycle      = base_meta.get("lifecycle", "published")
-    project_source = base_meta.get("project_source", "manual")
+    project_source = base_meta.get("project_source", "")  # 降级为普通字段
 
     # ── 知识管理字段 ──
     knowledge_type = base_meta.get("knowledge_type", "")
@@ -1206,8 +1210,13 @@ def ingest(
                 # ── 分面字段 ──
                 "content_type": content_type,
                 "domain": domain if isinstance(domain, list) else [domain],
+                "temporal_nature": temporal_nature,
+                "epistemic_status": epistemic_status,
+
+                # ── 生命周期（普通字段）──
                 "lifecycle": lifecycle,
                 "project_source": project_source,
+                "udc_code": base_meta.get("udc_code", ""),
 
                 # ── 知识管理 ──
                 "knowledge_type": knowledge_type,
@@ -1315,9 +1324,10 @@ def search(
         facet_filter: 分面过滤条件，格式：
             {
                 "content_type": ["knowledge"],           # 内容类型（任一匹配）
-                "domain": ["机械设计", "智能家居"],    # 主题域（任一匹配）
-                "lifecycle": "published",            # 生命周期（单个值）
-                "project_source": ["athanor"],        # 来源项目
+                "domain": ["0", "6"],                    # 主题域-UDC（任一匹配）
+                "temporal_nature": "evergreen",          # 时效属性（单个值）
+                "epistemic_status": "corroborated",      # 认知验证状态（单个值）
+                "lifecycle": "published",               # 生命周期（单个值，普通字段）
                 "is_personal": false,                  # 是否个人化
                 "trust_score_min": 3,                  # 最低可信度
                 "knowledge_type": ["formula"],          # 知识子类型
@@ -1334,8 +1344,11 @@ def search(
             "score": 0.95, "chunk_index": 0, "doc_id": "...",
             "images": [...],
             # 分面字段
-            "content_type": "knowledge", "domain": ["机械设计"],
-            "lifecycle": "published", "project_source": "athanor",
+            "content_type": "knowledge", "domain": ["6"],
+            "temporal_nature": "evergreen", "epistemic_status": "corroborated",
+            # 普通字段
+            "lifecycle": "published", "project_source": "",
+            "udc_code": "621",
             # 知识管理
             "is_personal": false, "trust_score": 4,
             "knowledge_type": "formula", "tags": ["齿轮"],
@@ -1376,8 +1389,8 @@ def search(
             if facet_filter.get(key):
                 _add_match(key, facet_filter[key])
 
-        # 单值匹配字段（lifecycle / project_source）
-        for key in ("lifecycle", "project_source"):
+        # 单值匹配字段（temporal_nature / epistemic_status / lifecycle）
+        for key in ("temporal_nature", "epistemic_status", "lifecycle"):
             if facet_filter.get(key):
                 must_conditions.append({
                     "key": key,
@@ -1437,8 +1450,12 @@ def search(
             # 分面字段
             "content_type":    payload.get("content_type", "knowledge"),
             "domain":          payload.get("domain", []),
+            "temporal_nature": payload.get("temporal_nature", "timeboxed"),
+            "epistemic_status":payload.get("epistemic_status", "unverified"),
+            # 普通字段
             "lifecycle":       payload.get("lifecycle", ""),
             "project_source":  payload.get("project_source", ""),
+            "udc_code":        payload.get("udc_code", ""),
             # 知识管理
             "is_personal":     payload.get("is_personal", False),
             "trust_score":     payload.get("trust_score", 3),
@@ -1525,6 +1542,7 @@ def auto_classify(text: str) -> dict:
     """
     from config.classifications import (
         CONTENT_TYPES, DOMAINS, LIFECYCLE_STAGES, KNOWLEDGE_TYPES,
+        TEMPORAL_NATURE, EPISTEMIC_STATUS,
         CONTENT_TYPE_OPTIONS, DOMAIN_OPTIONS, LIFECYCLE_OPTIONS,
         KNOWLEDGE_TYPE_OPTIONS, TRUST_SCORE_LABELS
     )
@@ -1541,6 +1559,8 @@ def auto_classify(text: str) -> dict:
     ct_list = "\n".join(f"  - {k}: {v}" for k, v in CONTENT_TYPES.items())
     domain_list = "\n".join(f"  - {k}: {v}" for k, v in DOMAINS.items())
     lifecycle_list = "\n".join(f"  - {k}: {v}" for k, v in LIFECYCLE_STAGES.items())
+    temporal_list = "\n".join(f"  - {k}: {v}" for k, v in TEMPORAL_NATURE.items())
+    epistemic_list = "\n".join(f"  - {k}: {v}" for k, v in EPISTEMIC_STATUS.items())
     ktype_list = "\n".join(f"  - {k}: {v}" for k, v in KNOWLEDGE_TYPES.items())
     trust_labels = "\n".join(f"  {k}: {v}" for k, v in TRUST_SCORE_LABELS.items())
 
@@ -1554,11 +1574,17 @@ def auto_classify(text: str) -> dict:
 ### content_type（内容类型）— 必须单选，从以下选项中选择：
 {ct_list}
 
-### domain（主题域）— 可多选 0-3 个，不相关就空数组 []：
+### domain（主题域，UDC 国际十进分类法）— 可多选 0-3 个，不相关就空数组 []：
 {domain_list}
 
-### lifecycle（生命周期）— 单选：
+### lifecycle（生命周期/工作流阶段）— 单选：
 {lifecycle_list}
+
+### temporal_nature（时效属性）— 单选，判断内容是否会随时间贬值：
+{temporal_list}
+
+### epistemic_status（认知验证状态，FPF L0-L2）— 单选：
+{epistemic_list}
 
 ### trust_score（可信度）— 1-5 整数，评分依据：
 {trust_labels}
@@ -1572,9 +1598,11 @@ def auto_classify(text: str) -> dict:
 
 ### author（作者）— 如果有明确出处/作者/标准号则提取，否则留空 ""
 
+### udc_code（UDC 细分码，可选）— 如果有足够信息，输出更精确的 UDC 类号，如 "621.39"、"004.8"、复合码 "621:004.8"。无法确定则留空 ""
+
 ## 输出格式
 严格输出以下 JSON，不要包含任何额外文字、不要用 ```json 包裹、不要加注释：
-{{"content_type":"standard","domain":["机械设计"],"lifecycle":"published","trust_score":4,"knowledge_type":"","keywords":["齿轮","模数","强度"],"title":"渐开线圆柱齿轮 模数系列","author":"GB/T 1357-2008"}}"""
+{{"content_type":"standard","domain":["0","6"],"lifecycle":"published","temporal_nature":"evergreen","epistemic_status":"corroborated","trust_score":4,"knowledge_type":"","keywords":["齿轮","模数","强度"],"title":"渐开线圆柱齿轮 模数系列","author":"GB/T 1357-2008","udc_code":"621"}}"""
 
     try:
         raw = _call_llm_api(
@@ -1613,17 +1641,22 @@ def auto_classify(text: str) -> dict:
     valid_ct = set(CONTENT_TYPES.keys())
     valid_domain = set(DOMAINS.keys())
     valid_lifecycle = set(LIFECYCLE_STAGES.keys())
+    valid_temporal = set(TEMPORAL_NATURE.keys())
+    valid_epistemic = set(EPISTEMIC_STATUS.keys())
     valid_ktype = set(KNOWLEDGE_TYPES.keys())
 
     classification = {
         "content_type": result.get("content_type", "knowledge"),
         "domain": result.get("domain", []),
         "lifecycle": result.get("lifecycle", "published"),
+        "temporal_nature": result.get("temporal_nature", "timeboxed"),
+        "epistemic_status": result.get("epistemic_status", "unverified"),
         "trust_score": result.get("trust_score", 3),
         "knowledge_type": result.get("knowledge_type", ""),
         "keywords": result.get("keywords", []),
         "title": result.get("title", ""),
         "author": result.get("author", ""),
+        "udc_code": result.get("udc_code", ""),
     }
 
     # 校验 content_type（非法值用默认）
@@ -1639,6 +1672,17 @@ def auto_classify(text: str) -> dict:
     # 校验 lifecycle
     if classification["lifecycle"] not in valid_lifecycle:
         classification["lifecycle"] = "published"
+
+    # 校验 temporal_nature
+    if classification["temporal_nature"] not in valid_temporal:
+        classification["temporal_nature"] = "timeboxed"
+
+    # 校验 epistemic_status（L0/L1→L2 需要显式验证动作，LLM 输出可能用简写）
+    raw_ep = str(classification["epistemic_status"]).strip().lower()
+    ep_map = {"l0": "unverified", "l1": "substantiated", "l2": "corroborated"}
+    classification["epistemic_status"] = ep_map.get(raw_ep, classification["epistemic_status"])
+    if classification["epistemic_status"] not in valid_epistemic:
+        classification["epistemic_status"] = "unverified"
 
     # 校验 trust_score（范围 1-5）
     try:
@@ -2349,9 +2393,9 @@ def get_facet_stats(collection: str = DEFAULT_COLLECTION) -> dict:
             "total_points": N,
             "facets": {
                 "content_type": {"knowledge": 120, "standard": 15, ...},
-                "domain":        {"机械设计": 45, "AI编程": 30, ...},
-                "lifecycle":     {"published": 80, "draft": 12, ...},
-                "project_source":{"manual": 50, "athanor": 30, ...},
+                "domain":        {"0": 45, "6": 30, ...},
+                "temporal_nature": {"evergreen": 80, "timeboxed": 12, ...},
+                "epistemic_status":{"corroborated": 50, "unverified": 30, ...},
             },
             "meta": {
                 "avg_trust": 3.2,
@@ -2400,8 +2444,8 @@ def get_facet_stats(collection: str = DEFAULT_COLLECTION) -> dict:
         # 聚合计数
         ct_count = defaultdict(int)
         domain_count = defaultdict(int)
-        lc_count = defaultdict(int)
-        ps_count = defaultdict(int)
+        tn_count = defaultdict(int)
+        ep_count = defaultdict(int)
         trust_sum = 0
         trust_n = 0
         personal_n = 0
@@ -2415,13 +2459,13 @@ def get_facet_stats(collection: str = DEFAULT_COLLECTION) -> dict:
             for d in pl.get("domain", []):
                 domain_count[d] += 1
 
-            lc = pl.get("lifecycle", "")
-            if lc:
-                lc_count[lc] += 1
+            tn = pl.get("temporal_nature", "")
+            if tn:
+                tn_count[tn] += 1
 
-            ps = pl.get("project_source", "")
-            if ps:
-                ps_count[ps] += 1
+            ep = pl.get("epistemic_status", "")
+            if ep:
+                ep_count[ep] += 1
 
             ts = pl.get("trust_score")
             if ts is not None:
@@ -2436,8 +2480,8 @@ def get_facet_stats(collection: str = DEFAULT_COLLECTION) -> dict:
 
         facets["content_type"] = dict(ct_count)
         facets["domain"] = dict(domain_count)
-        facets["lifecycle"] = dict(lc_count)
-        facets["project_source"] = dict(ps_count)
+        facets["temporal_nature"] = dict(tn_count)
+        facets["epistemic_status"] = dict(ep_count)
 
         meta_stats["avg_trust"] = round(trust_sum / trust_n, 1) if trust_n > 0 else 0
         meta_stats["personal_count"] = personal_n
@@ -2621,8 +2665,11 @@ def search_by_doc_id(
                 "chunk_index":     payload.get("chunk_index", 0),
                 "content_type":    payload.get("content_type", ""),
                 "domain":          payload.get("domain", []),
+                "temporal_nature": payload.get("temporal_nature", ""),
+                "epistemic_status":payload.get("epistemic_status", ""),
                 "lifecycle":       payload.get("lifecycle", ""),
                 "project_source":  payload.get("project_source", ""),
+                "udc_code":        payload.get("udc_code", ""),
                 "trust_score":     payload.get("trust_score", 3),
                 "is_canonical":    payload.get("is_canonical", True),
                 "is_archived":     payload.get("is_archived", False),

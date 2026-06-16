@@ -13,7 +13,6 @@ PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_DIR not in sys.path:
     sys.path.insert(0, PROJECT_DIR)
 import kb_query
-from config.classifications import CLASSIFICATION_SCHEMES
 from utils.ui_utils import (
     render_sidebar, cached_stats, cached_collections, cached_ingest_log,
     cached_embed_models, save_env, clear_kb_caches,
@@ -82,38 +81,11 @@ def dialog_delete():
             st.session_state.show_delete_dialog = False
             st.rerun()
 
-@st.dialog("切换分类法")
-def dialog_switch_scheme():
-    scheme_key = st.session_state.get("pending_scheme", "")
-    scheme = CLASSIFICATION_SCHEMES.get(scheme_key, {})
-    st.warning(f"⚠️ 切换分类法到「**{scheme.get('label', scheme_key)}**」")
-    st.caption("将创建新集合，旧集合保留不删除。需手动用「重建」迁移数据。")
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("✅ 确认切换", type="primary", use_container_width=True, key="confirm_scheme"):
-            created = 0
-            for cn in scheme.get("collections", {}).keys():
-                if kb_query._ensure_collection(cn):
-                    created += 1
-            save_env({"KB_CLASSIFICATION": scheme_key})
-            os.environ["KB_CLASSIFICATION"] = scheme_key
-            st.session_state.active_collection = list(scheme["collections"].keys())[0]
-            clear_kb_caches()
-            st.success(f"✅ 已切换，创建了 {created} 个新集合。")
-            st.session_state.show_scheme_dialog = False
-            st.rerun()
-    with c2:
-        if st.button("❌ 取消", use_container_width=True, key="cancel_scheme"):
-            st.session_state.show_scheme_dialog = False
-            st.rerun()
-
 # ── 渲染 Dialog（在页面顶层调用）──
 if st.session_state.get("show_clear_dialog"):
     dialog_clear()
 if st.session_state.get("show_delete_dialog"):
     dialog_delete()
-if st.session_state.get("show_scheme_dialog"):
-    dialog_switch_scheme()
 
 # ═══════════════════════════════════════════
 # 首次建库向导
@@ -124,20 +96,10 @@ if qdrant_ok and not collections:
     with st.form("wizard_form"):
         st.markdown("---")
         st.markdown("### 🏗️ 创建你的第一个知识库")
-        st.markdown("#### 步骤 1/2：选择分类方式")
+        st.markdown("#### 选择嵌入模型")
 
-        scheme_keys = list(CLASSIFICATION_SCHEMES.keys())
-        selected_scheme = st.selectbox(
-            "你的文档最适合哪种分类？",
-            options=scheme_keys,
-            format_func=lambda x: CLASSIFICATION_SCHEMES[x]["label"],
-            help="新手建议选「单库模式」",
-        )
-        scheme = CLASSIFICATION_SCHEMES[selected_scheme]
-        with st.expander("📖 这是什么意思？"):
-            st.markdown(scheme["detail"])
+        st.info("📊 分类方式：**分面分类法**（单集合 `athanor_v1` + 多维度 Payload 过滤）")
 
-        st.markdown("#### 步骤 2/2：选择嵌入模型")
         embed_models = cached_embed_models()
         if embed_models:
             embed_model = st.selectbox(
@@ -154,10 +116,7 @@ if qdrant_ok and not collections:
             )
 
         st.markdown("---")
-        st.caption(
-            f"将创建 {len(scheme['collections'])} 个集合："
-            f"{'、'.join(list(scheme['collections'].values())[:6])}"
-        )
+        st.caption("将创建集合：athanor_v1（2560维，Cosine 距离）")
 
         submitted = st.form_submit_button("🚀 创建知识库", type="primary", use_container_width=True)
 
@@ -165,20 +124,19 @@ if qdrant_ok and not collections:
         if not kb_query._check_qdrant():
             st.error("⚠️ Qdrant 未运行，无法创建。")
         else:
-            created = 0
-            for col_name in scheme["collections"].keys():
-                if kb_query._ensure_collection(col_name):
-                    created += 1
-            save_env({"KB_CLASSIFICATION": selected_scheme})
-            os.environ["KB_CLASSIFICATION"] = selected_scheme
-            if embed_model:
-                save_env({"KB_EMBED_MODEL": embed_model})
-                os.environ["KB_EMBED_MODEL"] = embed_model
-                kb_query.EMBED_MODEL = embed_model
-            st.session_state.active_collection = list(scheme["collections"].keys())[0]
-            clear_kb_caches()
-            st.success(f"✅ 已创建 {created} 个集合！请开始摄入文档。")
-            st.rerun()
+            if kb_query._ensure_collection("athanor_v1"):
+                save_env({"KB_CLASSIFICATION": "faceted"})
+                os.environ["KB_CLASSIFICATION"] = "faceted"
+                if embed_model:
+                    save_env({"KB_EMBED_MODEL": embed_model})
+                    os.environ["KB_EMBED_MODEL"] = embed_model
+                    kb_query.EMBED_MODEL = embed_model
+                st.session_state.active_collection = "athanor_v1"
+                clear_kb_caches()
+                st.success("✅ 已创建知识库！请开始摄入文档。")
+                st.rerun()
+            else:
+                st.error("Qdrant 未运行")
 
     st.stop()
 
@@ -195,14 +153,13 @@ st.markdown("### 📊 集合仪表盘")
 
 total_pts = sum(c["points"] for c in collections)
 current_embed = os.environ.get("KB_EMBED_MODEL", kb_query.EMBED_MODEL)
-current_class = os.environ.get("KB_CLASSIFICATION", "single")
 
 # 统计卡片
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("集合总数", len(collections))
 c2.metric("文档块总数", total_pts)
 c3.metric("嵌入模型", current_embed[:20])
-c4.metric("分类法", CLASSIFICATION_SCHEMES.get(current_class, {}).get("label", current_class)[:8])
+c4.metric("分类法", "分面分类")
 
 # 搜索过滤
 st.markdown("---")
@@ -274,6 +231,186 @@ else:
                         st.rerun()
 
 # ═══════════════════════════════════════════
+# 层 1.5: 分面统计 + 知识管理（仅当前集合有数据时显示）
+# ═══════════════════════════════════════════
+active_col_info = next((c for c in collections if c["name"] == current_col), None)
+if active_col_info and active_col_info["points"] > 0:
+    st.markdown("---")
+    mgmt_tab1, mgmt_tab2 = st.tabs(["📊 分面统计", "🔧 知识管理"])
+
+    with mgmt_tab1:
+        st.markdown("#### 分面维度分布")
+        if st.button("🔄 刷新统计", key="refresh_facet_stats", type="secondary"):
+            st.session_state.facet_stats = kb_query.get_facet_stats(current_col)
+            st.rerun()
+
+        facet_stats = st.session_state.get("facet_stats")
+        if facet_stats is None:
+            # 首次加载
+            with st.spinner("统计中..."):
+                facet_stats = kb_query.get_facet_stats(current_col)
+                st.session_state.facet_stats = facet_stats
+
+        if facet_stats and facet_stats.get("ok"):
+            fs = facet_stats
+            total = fs.get("total_points", 0)
+            meta = fs.get("meta", {})
+
+            # Meta 卡片
+            mc1, mc2, mc3, mc4 = st.columns(4)
+            mc1.metric("总条目", total)
+            mc2.metric("平均可信度", f"{meta.get('avg_trust', 0)} ⭐")
+            mc3.metric("个人化", meta.get('personal_count', 0))
+            mc4.metric("已归档", meta.get('archived_count', 0))
+
+            facets = fs.get("facets", {})
+
+            # 内容类型分布
+            ct_data = facets.get("content_type", {})
+            if ct_data:
+                st.markdown("##### 内容类型分布")
+                from config.classifications import CONTENT_TYPE_OPTIONS
+                ct_labels = dict(CONTENT_TYPE_OPTIONS)
+                ct_bars = ""
+                for ct, cnt in sorted(ct_data.items(), key=lambda x: -x[1]):
+                    pct = f"{cnt/total*100:.0f}%"
+                    label = ct_labels.get(ct, ct)
+                    ct_bars += f'<div style="display:flex;align-items:center;margin:4px 0;"><span style="width:120px;color:#ccc;font-size:12px;">{label}</span><div style="flex:1;background:rgba(255,107,53,0.1);border-radius:4px;height:18px;"><div style="width:{pct};background:linear-gradient(90deg,#FF6B35,#F7C948);height:100%;border-radius:4px;display:flex;align-items:center;justify-content:flex-end;padding-right:6px;"><span style="font-size:10px;color:#1a1a2e;font-weight:600;">{cnt}</span></div></div></div>'
+                st.markdown(ct_bars, unsafe_allow_html=True)
+
+            # 主题域分布
+            domain_data = facets.get("domain", {})
+            if domain_data:
+                st.markdown("##### 主题域分布")
+                from config.classifications import DOMAIN_OPTIONS
+                dom_labels = dict(DOMAIN_OPTIONS)
+                dom_cols = st.columns(min(len(domain_data), 4))
+                for idx, (d, cnt) in enumerate(sorted(domain_data.items(), key=lambda x: -x[1])):
+                    with dom_cols[idx % len(dom_cols)]:
+                        st.metric(dom_labels.get(d, d), cnt)
+
+            # 生命周期分布
+            lc_data = facets.get("lifecycle", {})
+            if lc_data:
+                st.markdown("##### 生命周期分布")
+                from config.classifications import LIFECYCLE_OPTIONS
+                lc_labels = dict(LIFECYCLE_OPTIONS)
+                lc_items = []
+                for lc, cnt in sorted(lc_data.items(), key=lambda x: -x[1]):
+                    icon = {"idea": "💡", "draft": "📝", "in_progress": "⚙️", "review": "👁️", "published": "✅", "archived": "📦"}.get(lc, "📌")
+                    lc_items.append(f"{icon} {lc_labels.get(lc, lc)}: **{cnt}**")
+                st.markdown(" · ".join(lc_items))
+        else:
+            st.info("暂无统计数据。请先摄入文档。")
+
+    with mgmt_tab2:
+        st.markdown("#### 知识条目管理")
+        st.caption("按文档管理：修改字段、建立关系、归档/删除。")
+
+        # 加载文档列表
+        if st.button("📋 加载文档列表", key="load_doc_list", type="secondary"):
+            with st.spinner("加载中..."):
+                st.session_state.doc_list = kb_query.get_doc_ids(current_col)
+            st.rerun()
+
+        doc_list = st.session_state.get("doc_list", {})
+        if doc_list and doc_list.get("ok"):
+            doc_ids = doc_list.get("doc_ids", [])
+            st.caption(f"共 **{len(doc_ids)}** 个文档")
+
+            # 选一个文档进行管理
+            selected_doc = st.selectbox(
+                "选择要管理的文档",
+                options=[""] + doc_ids,
+                format_func=lambda x: "（选择文档）" if x == "" else x[:16],
+                key="mgmt_selected_doc",
+            )
+
+            if selected_doc:
+                st.session_state.mgmt_doc = selected_doc
+                # 加载文档详情
+                doc_info = kb_query.search_by_doc_id(selected_doc)
+                if doc_info.get("ok") and doc_info.get("chunks"):
+                    first = doc_info["chunks"][0]
+
+                    st.markdown("---")
+                    st.markdown(f"**📄 {first.get('title', '无标题')}**")
+                    st.caption(f"类型: {first.get('content_type', '?')} · 可信度: {'⭐'*first.get('trust_score',3)} · 块数: {doc_info.get('total',0)}")
+                    if first.get("auto_summary"):
+                        st.caption(f"摘要: {first['auto_summary'][:100]}")
+
+                    # 快捷操作
+                    mgmt_col1, mgmt_col2, mgmt_col3 = st.columns(3)
+                    with mgmt_col1:
+                        new_trust = st.slider("可信度", 1, 5, first.get("trust_score", 3), key="mgmt_trust")
+                        if st.button("💾 更新可信度", key="save_trust", use_container_width=True):
+                            r = kb_query.update_metadata(selected_doc, {"trust_score": new_trust})
+                            if r.get("ok"):
+                                st.success(f"✅ 已更新 {r['updated']} 条")
+                                clear_kb_caches()
+                                st.rerun()
+                            else:
+                                st.error(r.get("error", "失败"))
+
+                    with mgmt_col2:
+                        is_arch = first.get("is_archived", False)
+                        archive_btn = "📤 取消归档" if is_arch else "📦 归档"
+                        if st.button(archive_btn, key="toggle_archive", use_container_width=True):
+                            r = kb_query.update_metadata(selected_doc, {"is_archived": not is_arch})
+                            if r.get("ok"):
+                                st.success(f"✅ 已{'取消归档' if is_arch else '归档'} {r['updated']} 条")
+                                clear_kb_caches()
+                                st.rerun()
+                            else:
+                                st.error(r.get("error", "失败"))
+
+                    with mgmt_col3:
+                        is_can = first.get("is_canonical", True)
+                        can_btn = "⭐ 标记非主版本" if is_can else "✅ 标记为主版本"
+                        if st.button(can_btn, key="toggle_canonical", use_container_width=True):
+                            r = kb_query.update_metadata(selected_doc, {"is_canonical": not is_can})
+                            if r.get("ok"):
+                                st.success(f"✅ {r['updated']} 条已更新")
+                                clear_kb_caches()
+                                st.rerun()
+                            else:
+                                st.error(r.get("error", "失败"))
+
+                    # 关系管理
+                    st.markdown("---")
+                    st.markdown("##### 🔗 关系管理")
+                    current_rels = first.get("relations", [])
+                    if current_rels:
+                        rel_text = ""
+                        for r in current_rels:
+                            rel_type = r.get("type", "?")
+                            rel_doc = r.get("doc_id", "?")
+                            emoji = {"similar": "📖", "references": "📎", "contradicts": "⚠️", "derived_from": "📄", "merged_into": "🔗", "supersedes": "🔄"}.get(rel_type, "🔹")
+                            rel_text += f"{emoji} {rel_type}: `{rel_doc[:12]}`  \n"
+                        st.markdown(rel_text or "*无关系*")
+                    else:
+                        st.caption("*暂无关系*")
+
+                    rel_col1, rel_col2, rel_col3 = st.columns([1, 2, 2])
+                    with rel_col1:
+                        rel_type = st.selectbox("关系类型", ["similar", "references", "contradicts", "derived_from", "merged_into", "supersedes"], key="mgmt_rel_type")
+                    with rel_col2:
+                        rel_target = st.text_input("目标文档ID", placeholder="doc_id", key="mgmt_rel_target")
+                    with rel_col3:
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        if st.button("➕ 添加关系", key="add_rel", use_container_width=True):
+                            if rel_target.strip():
+                                r = kb_query.set_doc_relations(selected_doc, add_relations=[{"type": rel_type, "doc_id": rel_target.strip()}])
+                                if r.get("ok"):
+                                    st.success(f"✅ 已添加关系（{r['updated']} 条）")
+                                    clear_kb_caches()
+                                    st.rerun()
+                                else:
+                                    st.error(r.get("error", "失败"))
+        else:
+            st.info("点击「加载文档列表」查看可管理的文档。")
+
+# ═══════════════════════════════════════════
 # 层 2: 集合操作区
 # ═══════════════════════════════════════════
 st.markdown("---")
@@ -303,25 +440,9 @@ with op1:
                 st.error("Qdrant 未运行")
 
 with op2:
-    st.markdown("#### 🔄 切换分类法")
-    current_scheme = os.environ.get("KB_CLASSIFICATION", "single")
-    scheme_opts = list(CLASSIFICATION_SCHEMES.keys())
-    scheme_idx = scheme_opts.index(current_scheme) if current_scheme in scheme_opts else len(scheme_opts) - 1
-    new_scheme = st.selectbox(
-        "分类法",
-        options=scheme_opts,
-        format_func=lambda x: CLASSIFICATION_SCHEMES[x]["label"],
-        index=scheme_idx,
-        key="scheme_sel",
-        label_visibility="collapsed",
-    )
-    if new_scheme != current_scheme:
-        scheme = CLASSIFICATION_SCHEMES[new_scheme]
-        st.caption(f"将创建 {len(scheme['collections'])} 个新集合")
-        if st.button("📐 应用", type="primary", use_container_width=True, key="apply_sch"):
-            st.session_state.pending_scheme = new_scheme
-            st.session_state.show_scheme_dialog = True
-            st.rerun()
+    st.markdown("#### 📊 当前分类法")
+    st.info("**分面分类法** — 单集合 `athanor_v1` + 多维度 Payload 过滤\n\n内容类型 / 主题域 / 生命周期 / 来源项目")
+    st.caption("分面分类是统一方案，不再需要切换。")
 
 with op3:
     st.markdown("#### 💾 导出备份")
@@ -330,7 +451,7 @@ with op3:
     if st.session_state.get("show_stats_dl"):
         stats = [
             {"name": c["name"], "points": c["points"], "dim": c["dim"],
-             "embed_model": current_embed, "classification": current_class}
+             "embed_model": current_embed, "classification": "faceted"}
             for c in collections
         ]
         st.download_button("📥 下载 JSON", json.dumps(stats, ensure_ascii=False, indent=2),

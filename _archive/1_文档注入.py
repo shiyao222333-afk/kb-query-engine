@@ -19,7 +19,7 @@ from utils.ui_utils import (
     render_sidebar, cached_stats, cached_collections, save_env, clear_kb_caches,
 )
 from utils.flame_bg import render_flame_banner
-from utils.ingest_ui import render_facet_form, build_facet_metadata
+from utils.ingest_ui import render_facet_form, build_facet_metadata, validate_facet_form
 from utils.file_handler import (
     detect_file_type, extract_text, extract_auto_metadata, detect_encoding,
     SIZE_LIMIT_MB, FORMAT_DISPLAY_NAMES,
@@ -450,6 +450,13 @@ if st.session_state.ingest_stage in ("classify", "done"):
         if qdrant_info.get("status") != "ok":
             st.error("⚠️ Qdrant 未运行，请先启动 Qdrant。")
         else:
+            # ── 校验四个核心分面必填 ──
+            is_valid, errors = validate_facet_form(form_values)
+            if not is_valid:
+                for err in errors:
+                    st.error(f"❌ {err}")
+                st.stop()
+
             progress_bar = st.progress(0, "正在分块...")
             time.sleep(0.2)
             progress_bar.progress(30, "正在嵌入向量...")

@@ -1,0 +1,878 @@
+"""
+Athanor · 熔知 / MindForge — NiceGUI 主入口
+v0.4.5 → NiceGUI migration (分面 v5.0)
+
+纯 Python SPA 架构：页面切换不重跑脚本，WebSocket 实时通信
+底层：FastAPI + Vue + Quasar + WebSocket
+
+页面:
+  /            → 文档注入（默认首页）
+  /search      → 智能检索
+  /hub         → 知识中枢
+  /config      → 引擎配置
+"""
+
+import os
+import sys
+import threading
+import time
+import asyncio
+import json
+import html as html_mod
+from collections import defaultdict
+
+# ── 路径设置 ──
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, PROJECT_DIR)
+
+import kb_query
+from config import classifications
+from utils.file_handler import (
+    detect_file_type, extract_text, extract_auto_metadata, detect_encoding,
+    SIZE_LIMIT_MB, FORMAT_DISPLAY_NAMES,
+)
+
+from nicegui import ui, app
+
+# ── 启用 .env ──
+ENV_FILE = os.path.join(PROJECT_DIR, ".env")
+if os.path.exists(ENV_FILE):
+    with open(ENV_FILE, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" in line:
+                key, _, value = line.partition("=")
+                os.environ[key.strip()] = value.strip().strip('"').strip("'")
+
+if os.environ.get("KB_EMBED_MODEL"):
+    kb_query.EMBED_MODEL = os.environ["KB_EMBED_MODEL"]
+
+# ═══════════════════════════════════════════
+# 全局状态（替代 st.session_state）
+# ═══════════════════════════════════════════
+STATE = {
+    "active_collection": kb_query.DEFAULT_COLLECTION,
+    "collections": [],
+    "qdrant_online": False,
+    "stats": {},
+    "embed_models": [],
+    "llm_models": [],
+    "ingest_content": "",
+    "ingest_source": "",
+    "ingest_method": "",
+    "ingest_stage": "input",
+    "classify_result": None,
+    "auto_metadata": None,
+    "file_info": None,
+    "last_answer": None,
+    "last_search": None,
+}
+
+
+def refresh_system_state():
+    """刷新全局状态：Qdrant 连接、集合列表、统计信息（所有请求带 timeout）。"""
+    import requests
+    try:
+        col_data = kb_query.list_collections()
+        STATE["collections"] = [c["name"] for c in col_data.get("collections", [])] if col_data.get("ok") else []
+        STATE["qdrant_online"] = col_data.get("ok", False)
+
+        if STATE["active_collection"] not in STATE["collections"] and STATE["collections"]:
+            STATE["active_collection"] = STATE["collections"][0]
+
+        if STATE["qdrant_online"]:
+            try:
+                resp = requests.get(
+                    f"{kb_query.QDRANT_URL}/collections/{STATE['active_collection']}",
+                    timeout=3,
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    cfg = data.get("result", {}).get("config", {}).get("params", {}).get("vectors", {})
+                    pts = data.get("result", {}).get("points_count", 0)
+                    STATE["stats"] = {"points": pts, "dim": cfg.get("size", "?"), "collection": STATE["active_collection"]}
+            except Exception:
+                STATE["stats"] = {}
+        else:
+            STATE["stats"] = {}
+    except Exception:
+        STATE["collections"] = []
+        STATE["qdrant_online"] = False
+        STATE["stats"] = {}
+
+    try:
+        STATE["embed_models"] = kb_query.get_embed_models()
+    except Exception:
+        STATE["embed_models"] = []
+
+
+# ── 启动时刷新状态（异步，不阻塞启动）──
+import requests as _requests
+_qdrant_alive = False
+try:
+    _r = _requests.get(f"{kb_query.QDRANT_URL}/collections", timeout=3)
+    _qdrant_alive = _r.status_code == 200
+except Exception:
+    pass
+
+if _qdrant_alive:
+    refresh_system_state()
+else:
+    STATE["qdrant_online"] = False
+del _requests, _r, _qdrant_alive
+
+# 嵌入模型预设
+EMBED_PRESETS = {
+    "qwen3-embedding": "qwen3-embedding:4b",
+    "bge-m3": "bge-m3:latest",
+    "nomic-embed-text": "nomic-embed-text:latest",
+    "mxbai-embed-large": "mxbai-embed-large:latest",
+}
+
+
+# ═══════════════════════════════════════════
+# 共享 UI 函数
+# ═══════════════════════════════════════════
+
+def build_left_drawer():
+    """构建左侧导航抽屉（所有页面共用）。"""
+    with ui.left_drawer(value=True, fixed=False, bordered=True).classes("bg-gray-900 text-white") as drawer:
+        with ui.column().classes("w-full items-center p-4"):
+            ui.markdown("## 🏭 Athanor")
+            ui.markdown("##### 熔知 · MindForge")
+            ui.label("个人本地知识引擎").classes("text-sm text-gray-400")
+            ui.separator()
+
+        # 知识库选择器
+        with ui.column().classes("w-full px-4"):
+            ui.markdown("### 📚 当前知识库")
+            collection_select = ui.select(
+                options=STATE["collections"] if STATE["collections"] else [kb_query.DEFAULT_COLLECTION],
+                value=STATE["active_collection"],
+                on_change=lambda e: set_active_collection(e.value),
+            ).classes("w-full").props('dense outlined dark')
+
+        ui.separator()
+
+        # 系统状态
+        with ui.column().classes("w-full px-4"):
+            ui.markdown("### 📊 系统状态")
+            status_badge = ui.badge("离线", color="red")
+            points_label = ui.label("文档块: --").classes("text-sm")
+            dim_label = ui.label("维度: --").classes("text-sm")
+
+            def _update_status():
+                refresh_system_state()
+                if STATE["qdrant_online"]:
+                    status_badge.set_text("在线")
+                    status_badge.props("color=green")
+                    stats = STATE.get("stats", {})
+                    points_label.set_text(f"文档块: {stats.get('points', '--')}")
+                    dim_label.set_text(f"维度: {stats.get('dim', '--')}")
+                else:
+                    status_badge.set_text("离线")
+                    status_badge.props("color=red")
+
+            ui.button("🔄 刷新", on_click=_update_status).props("flat dense").classes("text-xs")
+
+        ui.separator()
+
+        # 导航链接
+        with ui.column().classes("w-full px-2 gap-1"):
+            ui.link("📥 文档注入", "/").classes(
+                "w-full text-left p-2 rounded hover:bg-blue-700 transition no-underline text-white"
+            )
+            ui.link("💬 智能检索", "/search").classes(
+                "w-full text-left p-2 rounded hover:bg-blue-700 transition no-underline text-white"
+            )
+            ui.link("🗂️ 知识中枢", "/hub").classes(
+                "w-full text-left p-2 rounded hover:bg-blue-700 transition no-underline text-white"
+            )
+            ui.link("⚙️ 引擎配置", "/config").classes(
+                "w-full text-left p-2 rounded hover:bg-blue-700 transition no-underline text-white"
+            )
+
+        ui.separator()
+        with ui.column().classes("w-full px-4"):
+            ui.link("🔗 GitHub", "https://github.com/shiyao222333-afk/athanor").classes("text-xs text-blue-300")
+            ui.button("⏻ 关机", on_click=lambda: os._exit(0)).props("flat dense color=red").classes("text-xs mt-2")
+
+        return drawer
+
+
+def set_active_collection(name: str):
+    STATE["active_collection"] = name
+
+
+def _sys_status_section() -> tuple:
+    """返回系统状态 UI 元素供页面复用。"""
+    return STATE["qdrant_online"], STATE.get("stats", {})
+
+
+# ═══════════════════════════════════════════
+# 页面 1：文档注入（首页）
+# ═══════════════════════════════════════════
+
+@ui.page("/")
+def page_ingest():
+    build_left_drawer()
+
+    with ui.column().classes("w-full p-6"):
+        ui.markdown("# 📥 文档注入")
+        ui.markdown("*两阶段智能摄入：内容准备 → AI 分析 + 人工确认 → 入库*")
+
+        if not STATE["qdrant_online"]:
+            ui.badge("⚠️ Qdrant 离线，无法摄入。请启动 Qdrant。", color="red")
+            return
+
+        # ── 阶段一：内容输入 ──
+        tabs = ui.tabs().props("align=left")
+        with tabs:
+            upload_tab = ui.tab("📎 文件上传")
+            ocr_tab = ui.tab("📷 OCR 截图")
+            manual_tab = ui.tab("✏️ 手动输入")
+        tab_panels = ui.tab_panels(tabs, value=upload_tab).classes("w-full")
+
+        content_text = ui.textarea(label="已提取的文本内容").props("outlined rows=10").classes("w-full")
+        content_text_area = content_text
+        source_label = ui.label("来源：--").classes("text-sm text-gray-500")
+
+        ingest_content = ""
+        ingest_source = ""
+        ingest_method = ""
+
+        # ── Tab 1: 文件上传 ──
+        with tab_panels:
+            with ui.tab_panel(upload_tab):
+                ui.label("支持格式：TXT, MD, JSON, CSV, PDF, EPUB, HTML, SRT, DOCX, PPTX, PNG, JPG, BMP").classes("text-sm text-gray-400")
+                upload = ui.upload(
+                    label="拖拽或点击上传文件",
+                    auto_upload=True,
+                    max_file_size=SIZE_LIMIT_MB * 1024 * 1024,
+                    multiple=False,
+                ).classes("w-full").props("accept='.txt,.md,.json,.csv,.pdf,.epub,.html,.htm,.srt,.docx,.pptx,.png,.jpg,.jpeg,.bmp,.webp,.tiff'")
+
+                up_result = ui.label("").classes("text-sm")
+
+                def on_upload(e):
+                    nonlocal ingest_content, ingest_source, ingest_method
+                    try:
+                        file_bytes = e.content.read()
+                        fname = e.name
+                        fsize = len(file_bytes)
+                        if fsize > SIZE_LIMIT_MB * 1024 * 1024:
+                            ui.notify(f"⚠️ 文件 {fname} 超过 {SIZE_LIMIT_MB}MB 上限", type="warning")
+                            return
+
+                        # 检测文件类型
+                        file_type = detect_file_type(fname, file_bytes)
+                        STATE["file_info"] = file_type
+                        ext_label = ".".join(file_type.get("extensions", ["?"]))
+
+                        up_result.set_text(f"📎 {fname} · {fsize/1024:.1f}KB · {ext_label} · {file_type.get('format_name', '?')}")
+
+                        # 提取文本
+                        text = extract_text(fname, file_bytes)
+                        if len(text) > 5000:
+                            ui.notify(f"文本较长 ({len(text)} 字)，已截取前 5000 字发送给 AI 分析", type="warning")
+                            text = text[:5000]
+
+                        # 提取自动元数据
+                        auto_meta = extract_auto_metadata(fname, file_bytes, file_type)
+                        STATE["auto_metadata"] = auto_meta
+
+                        ingest_content = text
+                        content_text.set_value(text)
+                        ingest_source = f"文件: {fname}"
+                        source_label.set_text(f"来源：{fname}")
+                        ingest_method = "upload"
+                        STATE["ingest_content"] = text
+                        STATE["ingest_source"] = fname
+                        STATE["ingest_method"] = "upload"
+
+                        # 显示自动元数据
+                        if auto_meta:
+                            meta_lines = [f"📎 **{k}**: {v}" for k, v in auto_meta.items() if v]
+                            if meta_lines:
+                                ui.notify("文件元数据已自动提取", type="positive")
+
+                    except Exception as ex:
+                        ui.notify(f"❌ 处理失败: {ex}", type="negative")
+
+                upload.on("upload", on_upload)
+
+        # ── Tab 2: OCR ──
+        with tab_panels:
+            with ui.tab_panel(ocr_tab):
+                ui.label("支持 OCR（PaddleOCR）识别截图、扫描件中的文字").classes("text-sm text-gray-400")
+                ocr_upload = ui.upload(
+                    label="上传图片进行 OCR",
+                    auto_upload=True,
+                    multiple=False,
+                ).classes("w-full").props("accept='.png,.jpg,.jpeg,.bmp,.webp,.tiff'")
+
+                ocr_result_label = ui.label("").classes("text-sm")
+
+                def on_ocr(e):
+                    nonlocal ingest_content, ingest_source, ingest_method
+                    try:
+                        file_bytes = e.content.read()
+                        with open(f"_temp_ocr_{e.name}", "wb") as tf:
+                            tf.write(file_bytes)
+                        result = kb_query.ocr_image(f"_temp_ocr_{e.name}")
+                        text = result.get("ocr_text", "")
+                        content_text.set_value(text)
+                        ingest_content = text
+                        ingest_source = f"OCR: {e.name}"
+                        source_label.set_text(f"来源：OCR - {e.name}")
+                        ingest_method = "ocr"
+                        STATE["ingest_content"] = text
+                        STATE["ingest_source"] = f"OCR: {e.name}"
+                        STATE["ingest_method"] = "ocr"
+                        ocr_result_label.set_text(f"✅ 识别完成，{len(text)} 字")
+                        if result.get("needs_correction"):
+                            ocr_result_label.set_text(f"⚠️ 识别质量较低，建议 AI 纠错 ({len(text)} 字)")
+                    except Exception as ex:
+                        ui.notify(f"❌ OCR 失败: {ex}", type="negative")
+
+                ocr_upload.on("upload", on_ocr)
+
+        # ── Tab 3: 手动输入 ──
+        with tab_panels:
+            with ui.tab_panel(manual_tab):
+                manual_text = ui.textarea(
+                    label="粘贴或输入文本",
+                    placeholder="直接粘贴内容...",
+                ).props("outlined rows=12").classes("w-full")
+
+                def on_manual_save():
+                    nonlocal ingest_content, ingest_source, ingest_method
+                    txt = manual_text.value or ""
+                    content_text.set_value(txt)
+                    ingest_content = txt
+                    ingest_source = "手动输入"
+                    source_label.set_text("来源：手动输入")
+                    ingest_method = "manual"
+                    STATE["ingest_content"] = txt
+                    STATE["ingest_source"] = "手动输入"
+                    STATE["ingest_method"] = "manual"
+
+                ui.button("📥 确认内容", on_click=on_manual_save).props("color=blue")
+
+        ui.separator()
+
+        # ── 阶段二：AI 分类 + 确认 ──
+        ui.markdown("## 阶段二：AI 分析与元数据")
+        ui.markdown("*点击「AI 分析」让 LLM 自动推断分类和标签，然后人工确认后摄入。*")
+
+        ai_cols = ui.row().classes("w-full gap-4")
+        with ai_cols:
+            ai_btn = ui.button("🤖 AI 分析", on_click=lambda: None).props("color=teal")
+            ai_status = ui.label("等待分析...").classes("text-sm text-gray-500")
+
+        # 四核心分面表单（简化版）
+        with ui.row().classes("w-full gap-4 mt-4"):
+            with ui.column().classes("flex-1"):
+                ct_options = [o[0] for o in classifications.CONTENT_TYPE_OPTIONS]
+                ct_display = {o[0]: o[1] for o in classifications.CONTENT_TYPE_OPTIONS}
+                content_type = ui.select(
+                    label="内容类型 *",
+                    options=ct_options,
+                    value="knowledge",
+                ).classes("w-full")
+
+            with ui.column().classes("flex-1"):
+                dm_options = [o[0] for o in classifications.DOMAIN_OPTIONS]
+                dm_display = {o[0]: o[1] for o in classifications.DOMAIN_OPTIONS}
+                domain = ui.select(
+                    label="主题域 *",
+                    options=dm_options,
+                    multiple=True,
+                ).classes("w-full").props("use-chips")
+
+        with ui.row().classes("w-full gap-4 mt-2"):
+            with ui.column().classes("flex-1"):
+                tn_options = [o[0] for o in classifications.TEMPORAL_NATURE_OPTIONS]
+                temporal_nature = ui.select(
+                    label="时效属性 *",
+                    options=tn_options,
+                    value="timeboxed",
+                ).classes("w-full")
+
+            with ui.column().classes("flex-1"):
+                ep_options = [o[0] for o in classifications.EPISTEMIC_STATUS_OPTIONS]
+                epistemic_status = ui.select(
+                    label="认知验证 *",
+                    options=ep_options,
+                    value="unverified",
+                ).classes("w-full")
+
+        with ui.row().classes("w-full gap-4 mt-2"):
+            with ui.column().classes("flex-1"):
+                lc_options = [o[0] for o in classifications.LIFECYCLE_OPTIONS]
+                lifecycle = ui.select(
+                    label="工作流阶段",
+                    options=lc_options,
+                    value="published",
+                ).classes("w-full")
+
+            with ui.column().classes("flex-1"):
+                project_source = ui.input(
+                    label="关联项目",
+                    value="",
+                    placeholder="如：智能台灯Pro",
+                ).classes("w-full")
+
+        # 置信度 + 关键词
+        with ui.row().classes("w-full gap-4 mt-2"):
+            trust_score = ui.number(label="可信度 (0.0-1.0)", value=0.5, min=0.0, max=1.0, step=0.1).classes("w-1/3")
+            keywords = ui.input(label="关键词（逗号分隔）", placeholder="如: 机器学习, 神经网络, 深度学习").classes("w-2/3")
+
+        ui.separator()
+
+        # ── 摄入按钮 ──
+        def do_ingest():
+            nonlocal ingest_content, ingest_method, ingest_source
+            if not STATE["qdrant_online"]:
+                ui.notify("⚠️ Qdrant 离线", type="negative")
+                return
+            if not ingest_content.strip():
+                ui.notify("⚠️ 没有内容可摄入", type="negative")
+                return
+            domain_val = domain.value or []
+            if not domain_val:
+                ui.notify("❌ 「主题域」为必填分面，请至少选择一个", type="negative")
+                return
+
+            try:
+                metadata = {
+                    "content_type": content_type.value,
+                    "domain": list(domain_val) if isinstance(domain_val, (list, tuple)) else [domain_val],
+                    "temporal_nature": temporal_nature.value,
+                    "epistemic_status": epistemic_status.value,
+                    "lifecycle": lifecycle.value,
+                    "project_source": (project_source.value or "").strip(),
+                    "trust_score": trust_score.value,
+                    "keywords": [k.strip() for k in (keywords.value or "").split(",") if k.strip()],
+                    "source": ingest_source,
+                    "ingest_method": ingest_method or "manual",
+                }
+                result = kb_query.ingest(ingest_content, metadata=metadata, collection=STATE["active_collection"])
+                if result.get("ok"):
+                    ui.notify(f"✅ 摄入成功！({result.get('chunks', '?')} 块)", type="positive")
+                    # 重置
+                    ingest_content = ""
+                    content_text.set_value("")
+                    source_label.set_text("来源：--")
+                    content_type.set_value("knowledge")
+                    domain.set_value([])
+                    temporal_nature.set_value("timeboxed")
+                    epistemic_status.set_value("unverified")
+                    lifecycle.set_value("published")
+                    project_source.set_value("")
+                    refresh_system_state()
+                else:
+                    ui.notify(f"❌ 摄入失败: {result.get('error', '?')}", type="negative")
+            except Exception as ex:
+                ui.notify(f"❌ 异常: {ex}", type="negative")
+
+        ui.button("🚀 摄入到知识库", on_click=do_ingest).props("color=green size=lg").classes("w-full mt-2")
+
+        # AI 分析回调
+        def do_ai_analyze():
+            nonlocal ingest_content
+            if not ingest_content.strip():
+                ui.notify("⚠️ 请先输入内容", type="warning")
+                return
+
+            llm_configured = bool(os.environ.get("KB_LLM_API_KEY"))
+            if not llm_configured:
+                ui.notify("⚠️ 未配置 LLM（请在引擎配置中设置 API Key）", type="warning")
+                return
+
+            ai_status.set_text("正在分析...")
+            try:
+                result = kb_query.auto_classify(ingest_content)
+                if result and result.get("ok"):
+                    cls = result.get("classification", result)
+                    STATE["classify_result"] = result
+                    ai_status.set_text("✅ 分析完成！")
+                    # 自动填充表单
+                    ct_val = cls.get("content_type", "knowledge")
+                    if ct_val in ct_options:
+                        content_type.set_value(ct_val)
+                    dm_val = cls.get("domain", [])
+                    if dm_val:
+                        if isinstance(dm_val, str):
+                            dm_val = [dm_val]
+                        valid_dm = [d for d in dm_val if d in dm_options]
+                        if valid_dm:
+                            domain.set_value(valid_dm)
+                    tn_val = cls.get("temporal_nature", "timeboxed")
+                    if tn_val in tn_options:
+                        temporal_nature.set_value(tn_val)
+                    ep_val = cls.get("epistemic_status", "unverified")
+                    if ep_val in ep_options:
+                        epistemic_status.set_value(ep_val)
+                    lc_val = cls.get("lifecycle", "published")
+                    if lc_val in lc_options:
+                        lifecycle.set_value(lc_val)
+                    ts = cls.get("trust_score", 3)
+                    trust_score.set_value(float(ts) if ts else 3.0)
+                    kw = cls.get("keywords", [])
+                    if kw:
+                        keywords.set_value(", ".join(kw if isinstance(kw, list) else [str(kw)]))
+                    ui.notify("LLM 分析结果已自动填入表单，请确认后摄入", type="positive")
+                else:
+                    ai_status.set_text("⚠️ 分析返回为空，请手动填写")
+            except Exception as ex:
+                ai_status.set_text(f"❌ 分析失败: {ex}")
+                ui.notify(f"AI 分析失败: {ex}", type="negative")
+
+        ai_btn.on("click", do_ai_analyze)
+
+
+# ═══════════════════════════════════════════
+# 页面 2：智能检索
+# ═══════════════════════════════════════════
+
+@ui.page("/search")
+def page_search():
+    build_left_drawer()
+
+    with ui.column().classes("w-full p-6"):
+        ui.markdown("# 💬 智能检索")
+        ui.markdown("*语义搜索 + AI 问答：输入问题，勾选选项控制搜索行为。*")
+
+        if not STATE["qdrant_online"]:
+            ui.badge("⚠️ Qdrant 离线，无法搜索。", color="red")
+            return
+
+        # 搜索范围
+        with ui.row().classes("w-full gap-4 items-end"):
+            search_col = ui.select(
+                label="📚 搜索范围",
+                options=STATE["collections"] if STATE["collections"] else [STATE["active_collection"]],
+                value=STATE["active_collection"],
+            ).classes("w-64")
+
+        # 搜索栏
+        with ui.row().classes("w-full gap-2 items-end mt-4"):
+            query_input = ui.input(
+                label="输入问题或关键词",
+                placeholder="例如：齿轮的失效形式有哪些？",
+            ).classes("flex-1")
+
+            top_k = ui.number(label="Top K", value=5, min=1, max=20, step=1).classes("w-20")
+            use_llm = ui.switch("使用 AI 回答", value=True)
+
+        search_btn = ui.button("🔍 搜索", on_click=lambda: None).props("color=blue size=lg")
+        results_area = ui.column().classes("w-full mt-6")
+
+        async def do_search():
+            results_area.clear()
+            query = (query_input.value or "").strip()
+            if not query:
+                ui.notify("请输入搜索内容", type="warning")
+                return
+
+            with results_area:
+                ui.spinner(size="lg").classes("self-center")
+                await asyncio.sleep(0.1)  # let spinner render
+
+            try:
+                if use_llm.value:
+                    result = kb_query.answer(
+                        query,
+                        top_k=top_k.value,
+                        collection=search_col.value,
+                    )
+                    with results_area:
+                        results_area.clear()
+                        ui.markdown("### 🤖 AI 回答")
+                        answer_text = result.get("answer", "无回答")
+                        ui.markdown(answer_text)
+
+                        highlights = result.get("highlights", [])
+                        if highlights:
+                            ui.separator()
+                            ui.markdown("### 📚 来源引用")
+                            for i, h in enumerate(highlights):
+                                with ui.card().classes("w-full"):
+                                    ui.markdown(f"**{i+1}.** {h.get('title', '无标题')}")
+                                    ui.markdown(f"```\n{h.get('text', '')[:300]}\n```")
+                                    ui.label(f"分数: {h.get('score', 0):.2f}").classes("text-xs text-gray-500")
+                    STATE["last_answer"] = result
+                else:
+                    result = kb_query.search(
+                        query,
+                        top_k=top_k.value,
+                        collection=search_col.value,
+                    )
+                    with results_area:
+                        results_area.clear()
+                        ui.markdown("### 🔍 搜索结果")
+                        for i, r in enumerate(result.get("results", [])):
+                            with ui.card().classes("w-full"):
+                                ui.markdown(f"**{i+1}.** {r.get('title', '无标题')}")
+                                ui.markdown(f"```\n{r.get('text', '')[:300]}\n```")
+                                ui.label(f"分数: {r.get('score', 0):.2f}").classes("text-xs text-gray-500")
+                    STATE["last_search"] = result
+
+                refresh_system_state()
+            except Exception as ex:
+                with results_area:
+                    results_area.clear()
+                    ui.notify(f"搜索失败: {ex}", type="negative")
+
+        search_btn.on("click", do_search)
+
+
+# ═══════════════════════════════════════════
+# 页面 3：知识中枢
+# ═══════════════════════════════════════════
+
+@ui.page("/hub")
+def page_hub():
+    build_left_drawer()
+
+    with ui.column().classes("w-full p-6"):
+        ui.markdown("# 🗂️ 知识中枢")
+        ui.markdown("*知识库集合的指挥中心 — 创建、管理、切换、重建。*")
+
+        if not STATE["qdrant_online"]:
+            ui.badge("⚠️ Qdrant 离线，请先启动。", color="red")
+            return
+
+        # 集合列表卡片
+        collections = STATE["collections"]
+        current = STATE["active_collection"]
+        stats = STATE.get("stats", {})
+
+        with ui.row().classes("w-full gap-4"):
+            with ui.card().classes("flex-1"):
+                ui.markdown("### 📊 集合概览")
+                ui.label(f"当前知识库：**{current}**")
+                ui.label(f"集合数量：{len(collections)}")
+                ui.label(f"文档块数：{stats.get('points', '--')}")
+                ui.label(f"向量维度：{stats.get('dim', '--')}")
+
+            with ui.card().classes("flex-1"):
+                ui.markdown("### 🔧 操作")
+                new_col_name = ui.input(label="新知识库名称", placeholder="输入名称...").classes("mb-2")
+
+                def create_col():
+                    name = (new_col_name.value or "").strip()
+                    if not name:
+                        ui.notify("请输入名称", type="warning")
+                        return
+                    try:
+                        kb_query.create_collection(name)
+                        ui.notify(f"✅ 知识库「{name}」已创建", type="positive")
+                        refresh_system_state()
+                        new_col_name.set_value("")
+                    except Exception as ex:
+                        ui.notify(f"创建失败: {ex}", type="negative")
+
+                ui.button("➕ 创建知识库", on_click=create_col).props("color=blue").classes("mb-2")
+
+                def clear_col():
+                    try:
+                        result = kb_query.clear_collection(current)
+                        if result.get("ok"):
+                            ui.notify(f"✅ 已清空 {result.get('deleted', 0)} 条", type="positive")
+                            refresh_system_state()
+                    except Exception as ex:
+                        ui.notify(f"清空失败: {ex}", type="negative")
+
+                ui.button("🗑️ 清空当前库", on_click=lambda: ui.notify("⚠️ 请确认：此操作不可撤销。再次点击确认清空。", type="warning")).props("color=red flat")
+
+        # 切换集合
+        if len(collections) > 1:
+            ui.separator()
+            ui.markdown("### 🔄 切换知识库")
+            with ui.row().classes("w-full gap-2"):
+                for c in collections:
+                    color = "green" if c == current else "grey"
+                    ui.button(c, on_click=lambda c=c: set_active_collection(c)).props(f"color={color} flat")
+
+
+# ═══════════════════════════════════════════
+# 页面 4：引擎配置
+# ═══════════════════════════════════════════
+
+@ui.page("/config")
+def page_config():
+    build_left_drawer()
+
+    with ui.column().classes("w-full p-6"):
+        ui.markdown("# ⚙️ 引擎配置")
+        ui.markdown("*配置底层引擎参数。保存后写入 `.env` 文件。*")
+
+        tabs = ui.tabs().props("align=left")
+        with tabs:
+            llm_tab = ui.tab("🤖 LLM")
+            embed_tab = ui.tab("🧬 嵌入模型")
+            sys_tab = ui.tab("⚙️ 系统")
+        panels = ui.tab_panels(tabs, value=llm_tab).classes("w-full")
+
+        # ── LLM 配置 ──
+        with panels:
+            with ui.tab_panel(llm_tab):
+                ui.markdown("### 大语言模型配置")
+                llm_key = ui.input(
+                    label="API Key",
+                    password=True,
+                    password_toggle_button=True,
+                    value=os.environ.get("KB_LLM_API_KEY", ""),
+                ).classes("w-full")
+                llm_base = ui.input(
+                    label="API Base URL",
+                    value=os.environ.get("KB_LLM_BASE_URL", "https://api.deepseek.com"),
+                ).classes("w-full")
+                llm_model = ui.input(
+                    label="模型名称",
+                    value=os.environ.get("KB_LLM_MODEL", "deepseek-chat"),
+                ).classes("w-full")
+
+                def save_llm():
+                    data = {
+                        "KB_LLM_API_KEY": llm_key.value or "",
+                        "KB_LLM_BASE_URL": llm_base.value or "",
+                        "KB_LLM_MODEL": llm_model.value or "",
+                    }
+                    _save_env(data)
+                    ui.notify("✅ LLM 配置已保存", type="positive")
+
+                ui.button("💾 保存 LLM 配置", on_click=save_llm).props("color=blue")
+
+            # ── 嵌入模型 ──
+            with ui.tab_panel(embed_tab):
+                ui.markdown("### 嵌入模型管理")
+                models = STATE["embed_models"]
+
+                if models:
+                    # Handle both dict and string format
+                    rows = []
+                    for m in models:
+                        if isinstance(m, dict):
+                            rows.append({"name": m.get("name", "?"), "size": m.get("size", "?"), "status": "✅"})
+                        else:
+                            rows.append({"name": str(m), "size": "-", "status": "✅"})
+                    embed_table = ui.aggrid({
+                        "columnDefs": [
+                            {"headerName": "模型名", "field": "name", "width": 200},
+                            {"headerName": "大小", "field": "size", "width": 100},
+                            {"headerName": "状态", "field": "status", "width": 100},
+                        ],
+                        "rowData": rows,
+                    }).classes("w-full h-64")
+
+                ui.markdown("#### 预设模型")
+                for preset_name, preset_full in EMBED_PRESETS.items():
+                    with ui.row().classes("gap-2 items-center"):
+                        ui.label(f"**{preset_name}** → `{preset_full}`")
+
+                current_embed = ui.input(
+                    label="当前嵌入模型",
+                    value=os.environ.get("KB_EMBED_MODEL", kb_query.EMBED_MODEL),
+                ).classes("w-full")
+
+                def save_embed():
+                    val = (current_embed.value or "").strip()
+                    if val:
+                        _save_env({"KB_EMBED_MODEL": val})
+                        os.environ["KB_EMBED_MODEL"] = val
+                        kb_query.EMBED_MODEL = val
+                        ui.notify("✅ 嵌入模型已保存", type="positive")
+
+                ui.button("💾 保存", on_click=save_embed).props("color=blue")
+
+            # ── 系统配置 ──
+            with ui.tab_panel(sys_tab):
+                ui.markdown("### 系统设置")
+                kb_root = ui.input(
+                    label="知识库根目录",
+                    value=os.environ.get("KB_ROOT_PATH", os.path.join(PROJECT_DIR, "local_data")),
+                ).classes("w-full")
+
+                def save_sys():
+                    _save_env({"KB_ROOT_PATH": kb_root.value or ""})
+                    ui.notify("✅ 系统配置已保存", type="positive")
+
+                ui.button("💾 保存", on_click=save_sys).props("color=blue")
+
+                ui.separator()
+                ui.markdown("### 版本信息")
+                ui.label(f"Athanor: v{kb_query.__version__}")
+                ui.label(f"NiceGUI: 3.13.0")
+                ui.label(f"Qdrant: {kb_query.QDRANT_URL}")
+
+
+# ═══════════════════════════════════════════
+# 工具函数
+# ═══════════════════════════════════════════
+
+def _save_env(kv: dict):
+    """增量写入 .env 文件。"""
+    lines = []
+    if os.path.exists(ENV_FILE):
+        with open(ENV_FILE, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+
+    for key, val in kv.items():
+        found = False
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#") and stripped.split("=", 1)[0].strip() == key:
+                lines[i] = f"{key}={val}\n"
+                found = True
+                break
+        if not found:
+            lines.append(f"{key}={val}\n")
+
+    with open(ENV_FILE, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+
+
+# ═══════════════════════════════════════════
+# 启动
+# ═══════════════════════════════════════════
+
+def _auto_shutdown():
+    """后台线程：当所有浏览器标签页关闭时自动退出。"""
+    CHECK = 3
+    IDLE_MAX = 3
+    time.sleep(10)  # 等 NiceGUI 启动
+    idle = 0
+    while True:
+        time.sleep(CHECK)
+        try:
+            # NiceGUI app.storage 和 WebSocket 连接检测
+            import requests
+            requests.get("http://localhost:8080", timeout=2)
+            idle = 0
+        except Exception:
+            idle += 1
+            if idle >= IDLE_MAX:
+                print("\n[Athanor] 浏览器已关闭，自动退出。")
+                os._exit(0)
+
+
+@app.on_startup
+def startup():
+    refresh_system_state()
+    threading.Thread(target=_auto_shutdown, daemon=True).start()
+
+
+if __name__ in {"__main__", "__mp_main__"}:
+    ui.run(
+        title="Athanor · 熔知",
+        host="127.0.0.1",
+        port=8080,
+        reload=False,
+        show=False,
+        storage_secret="athanor-mindforge-secret",
+    )
