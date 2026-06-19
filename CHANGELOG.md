@@ -1,6 +1,6 @@
 # Changelog
 
-> Athanor / KnowledgeForge 版本变更日志。
+> Citrinitas（熔知）版本变更日志。
 > 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/)，
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 >
@@ -10,7 +10,21 @@
 
 ## [Unreleased]
 
-*暂无。下一个版本 v0.4.5 将包含 P1 问题修复（见 PROJECT_PLAN.md）。*
+### Changed — 2026-06-19
+- 🔄 项目命名重构：Athanor → Citrinitas（代码内部全量改名）
+  - main.py / run.py / run.bat：标题 / 打印 / 窗口名更新
+  - config / utils / classifications：注释更新
+  - sync_ima.py：所有引用更新
+  - .codebuddy/CODEBUDDY.md：启动路径更新
+  - venv 重建为 `D:\citrinitas\venv`
+  - Qdrant 集合名 `athanor_v1` 保留不变（避免数据迁移）
+
+### Fixed — 2026-06-19
+- 🐛 启动崩溃：Qdrant 离线时 `_r` 未定义 NameError
+
+### Added — 2026-06-19
+- ✨ 新增 BLUEPRINT.md（项目宪法）
+- ✨ 新增 FLOWCHART.md（数据流程图 + 节点定义）
 
 ---
 

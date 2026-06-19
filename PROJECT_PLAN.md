@@ -1,4 +1,4 @@
-# Athanor / KnowledgeForge — 项目主计划
+# Citrinitas — 项目主计划
 
 > 本文档管理 **功能路线图** 和 **设计决策**。版本变更记录见 `CHANGELOG.md`，Bug 跟踪见 `ISSUES.md`。
 
@@ -95,7 +95,7 @@
 ### 阶段五：无 UI 管线
 
 - [ ] 5a. `prepare_content(interactive=False)` 统一入口
-- [ ] 5b. Alembic → Athanor 传输协议
+- [ ] 5b. Nigredo → Citrinitas 传输协议
 - [ ] 5c. 命令行工具: `python -m athanor review --list`
 
 ### 文件类型分层
@@ -156,7 +156,7 @@
 
 ### 三条启发
 
-| # | 启发方向 | 学自 | 核心想法 | Athanor 切入点 | 落地版本 |
+| # | 启发方向 | 学自 | 核心想法 | Citrinitas 切入点 | 落地版本 |
 |---|------|------|---------|-----------------|:--:|
 | 1 | 知识关系网 | RAGFlow | NetworkX 内存图，实体+关系提取+图遍历 | 从已有关系字段建图（零 LLM），分面分类天然着色 | v0.5.0 |
 | 2 | QA 自动生成 | FastGPT | 文档→LLM 拆成问答对→向量化 | 嵌入摄入管线，作为可选开关 | v0.6.0 |
@@ -210,9 +210,9 @@ LLM 解析搜索词自动生成分面过滤条件（如 "齿轮国标" → domai
 - 配套隐私/访问权限机制（`access_level` 落地实现）
 - domain 推断规则优化：`personal_note` 类型的 domain 默认 → 哲学/心理学(1)
 
-### FPF 信任聚合（WLNK）→ 并入 Crucible
+### FPF 信任聚合（WLNK）→ 并入 Albedo
 
-arxiv 2601.21116 WLNK 原则不放在 Athanor，作为 Crucible（炼真）的核心功能。
+arxiv 2601.21116 WLNK 原则不放在 Citrinitas，作为 Albedo（炼真）的核心功能。
 
 ### project_source 升级路径
 
