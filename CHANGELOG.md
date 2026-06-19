@@ -11,20 +11,57 @@
 ## [Unreleased]
 
 ### Fixed
-- 🔧 P1 问题修复（D1/U7/S1）：
-  - D1+U7: `trust_score` 统一为 0-5 刻度（0=未评级），`TRUST_SCORE_LABELS` 加入 `0` 键，`auto_classify` prompt 修正，结果加 clamp 防御
-  - S1: Payload Index 补充 `needs_review` 字段（`_ensure_collection()` + `create_collection()`）
+- 🔧 P2/P3 问题修复批次（待规划）：
+  - F8: `source_path` 未入库
+  - D5: 图片存绝对路径
+  - E3: XSS 防护复核
+  - C1-C3: `schema.md` 修正
+  - C6-C11: 僵尸文件清理
+  - N1-N5: `.env` 清理
+  - U1: `ingest_ui.py` 僵尸文件
+  - D6-D7: `ext_` 字段 + `facet_filter` 静默忽略
+  - S5: `get_facet_stats()` 全量 scroll
+
+---
+
+## [v0.5.0] - 2026-06-20
+
+### Added
+- ✨ G2: L2 管道实现（文件元数据→UDC 推断）
+  - 从 `metadata` 字段（title/author/keywords/source）提取文本
+  - 使用 `keyword_domain_map` 推断 UDC 主类
+  - `keyword_domain_map` 移到 L2 前，L2/L3 共用
+  - 如果 L2 已推断 domain，跳过 L3
+
+### Fixed
+- 🔧 G1: `normalize_facet_values()` 增强（模糊映射表）
+  - 新增 `FUZZY_FACET_MAPPING` 模糊映射表（4 个分面字段）
+    - `content_type`: 中文/英文变体 → 标准 key
+    - `domain`: 中文描述/UDC 代码 → UDC 主类
+    - `temporal_nature`: 中文描述 → evergreen/timeboxed/transient
+    - `epistemic_status`: L0/L1/L2 简写/中文描述 → 标准 key
+  - `normalize_facet_values()` 增强：优先查 `FUZZY_FACET_MAPPING`（精确/大小写不敏感/部分匹配）
+- 🔧 C10: 为 6 处 `except:pass` 添加日志记录
+  - L495: PPStructure 失败回退 PaddleOCR
+  - L636: 批量嵌入失败回退逐条
+  - L776: Payload 索引创建失败（可忽略）
+  - L823: 集合创建异常（可忽略）
+  - L991: 日志写入失败（可忽略）
+  - L1012: scroll 单页失败（跳过）
+- 🔧 D4: `_text_hash()` 16-bit → 32-bit（降低碰撞风险）
+- 🔧 F6+S3: `search()` 返回 `content_hash` 字段
+- 🔧 S4: `search()` 返回 `doc_uid` 字段
 
 ---
 
 ## [v0.4.9] - 2026-06-20
 
 ### Fixed
-- D1+U7: `trust_score` 统一为 0-5 刻度（0=未评级）
-- `TRUST_SCORE_LABELS` 加入 `0: 未评级` 键
-- `auto_classify` prompt 修正为 0-5
-- `auto_classify` 结果加 `max(0, min(5, ...))` clamp
-- `main.py` `trust_score.set_value()` 加 clamp
+- 🔧 P1 问题修复（D1/U7/S1/F4）：
+  - D1+U7: `trust_score` 统一为 0-5 刻度（0=未评级），`TRUST_SCORE_LABELS` 加入 `0` 键，`auto_classify` prompt 修正，结果加 clamp 防御
+  - S1: Payload Index 补充 `needs_review` 字段（`_ensure_collection()` + `create_collection()`）
+  - F4: `search_by_doc_id()` 返回 `needs_review` 字段
+  - D2: 实现 `detect_encoding()` 函数（chardet + 兜底链）
 - `schema.md` 更新为 0-5（两处）
 
 ---

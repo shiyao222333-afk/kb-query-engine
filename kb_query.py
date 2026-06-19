@@ -46,7 +46,7 @@ from docx import Document
 from bs4 import BeautifulSoup
 from config.classifications import normalize_facet_values
 
-__version__ = "0.4.9"
+__version__ = "0.5.0"
 
 try:
     from fpdf import FPDF
