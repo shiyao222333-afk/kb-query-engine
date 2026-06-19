@@ -1246,9 +1246,9 @@ def rebuild_from_log(
 
 
 def _text_hash(text: str) -> str:
-    """内容的去重哈希（规范化后 SHA256，取前 16 位）"""
+    """内容的去重哈希（规范化后 SHA256，取前 32 位）"""
     normalized = re.sub(r'\s+', ' ', text).strip().lower()
-    return hashlib.sha256(normalized.encode()).hexdigest()[:16]
+    return hashlib.sha256(normalized.encode()).hexdigest()[:32]
 
 
 def _extract_images(text: str) -> list[str]:
@@ -1829,6 +1829,8 @@ def search(
             "score":           round(r.get("score", 0), 4),
             "chunk_index":     payload.get("chunk_index", 0),
             "doc_id":          payload.get("doc_id", ""),
+            "content_hash":    payload.get("content_hash", ""),
+            "doc_uid":        payload.get("doc_uid", ""),
             "images":          payload.get("images", []),
             # 分面字段
             "content_type":    payload.get("content_type", "knowledge"),
