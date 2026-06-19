@@ -1,14 +1,50 @@
 """
-Athanor 分面分类 + 完整字段定义 — Faceted Classification Schema v5.0
+Citrinitas 分面分类 + 完整字段定义 — Faceted Classification Schema v5.1
 
 设计原则：
   - 分面分类（Faceted Classification）替代传统层级分类法
   - 4个独立分面：内容类型 / 主题域(UDC) / 时效属性 / 认知验证状态
   - 分组字段：relations / timeline / origin / stats（语义聚拢，减少字段数）
   - 每个分面的值可独立扩展，无需修改数据结构
-  - 总字段数：36个（含10个预留扩展字段）
+  - 总字段数：36 个（28 个活跃字段 + 10 个预留扩展槽位）
+  - 所有活跃字段 100% 自动填充，字段来源分四象限（见下方）
 
 存储方案：单集合（athanor_v1）+ Payload 过滤
+
+═══════════════════════════════════════════
+字段来源四象限（Field Source Classification）
+═══════════════════════════════════════════
+
+象限一 — 文件自带（File-originated，置信度 1.0）
+  从文件元数据层提取，优先级最高。当与 AI 推断冲突时，文件自带优先。
+  字段: title, origin.author, origin.source_url, origin.file_type, source,
+        timeline.published, version, timeline.effective
+
+象限二 — AI 推断（AI-inferred，置信度由 LLM 返回）
+  LLM 分析文本语义推断。当文件无对应元数据时，AI 作为后备来源。
+  字段: content_type, domain, temporal_nature, epistemic_status, udc_code,
+        keywords, auto_summary, trust_score, knowledge_type, is_personal, lifecycle
+
+象限三 — 程序自动生成（System-generated，置信度 1.0）
+  纯代码逻辑，确定性输出。
+  字段: doc_id, content_hash, text, chunk_index, images, language,
+        timeline.ingested, timeline.accessed, stats.access_count, stats.starred,
+        origin.ingest_method, is_canonical, access_level, is_archived, batch_id
+
+象限四 — 智能默认值（Smart defaults，置信度 0.0）
+  当前无法自动确定，填入占位值等待未来进化。
+  字段: project_source, target_platform, related_product, tags, relations,
+        timeline.expiry, + 10 预留扩展槽位
+
+填充优先级: 文件自带 > AI 推断 > 智能默认值
+程序自动生成字段与其他三类无重叠，不存在优先级冲突。
+
+═══════════════════════════════════════════
+
+v5.1 变更（2026-06-17）:
+  - 新增四象限字段来源分类（即本文档顶部章节）
+  - 明确 36 = 28活跃 + 10扩展槽位
+  - title/author 填充优先级：文件自带 > AI 推断
 
 v5.0 变更（2026-06-16）:
   - domain: 自定义9域 → UDC 9主类
@@ -277,7 +313,7 @@ CLASSIFICATION_SCHEMES = {
         "desc":   "多维度标签式分类，适合混合内容类型",
         "detail": (
             "4 个分面：内容类型(15) / 主题域-UDC(9) / 时效属性(3) / 认知验证状态(3)\n"
-            "36 个字段：分组设计（relations/timeline/origin/stats）+ 10 个预留扩展"
+            "28 个活跃字段 + 10 个预留扩展槽位：分组设计（relations/timeline/origin/stats）"
         ),
         "collections": {"athanor_v1": "全部分面分类内容"},
     }

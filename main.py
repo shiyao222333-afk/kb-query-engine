@@ -1,5 +1,5 @@
 """
-Athanor · 熔知 / MindForge — NiceGUI 主入口
+Citrinitas · 熔知 — NiceGUI 主入口
 v0.4.4 → NiceGUI migration (分面 v5.0)
 
 纯 Python SPA 架构：页面切换不重跑脚本，WebSocket 实时通信
@@ -147,8 +147,8 @@ def build_left_drawer():
     """构建左侧导航抽屉（所有页面共用）。"""
     with ui.left_drawer(value=True, fixed=False, bordered=True).classes("bg-gray-900 text-white") as drawer:
         with ui.column().classes("w-full items-center p-4"):
-            ui.markdown("## 🏭 Athanor")
-            ui.markdown("##### 熔知 · MindForge")
+            ui.markdown("## 🏭 Citrinitas")
+            ui.markdown("##### 熔知 · Citrinitas")
             ui.label("个人本地知识引擎").classes("text-sm text-gray-400")
             ui.separator()
 
@@ -211,7 +211,7 @@ def build_left_drawer():
 
         ui.separator()
         with ui.column().classes("w-full px-4"):
-            ui.link("🔗 GitHub", "https://github.com/shiyao222333-afk/athanor").classes("text-xs text-blue-300")
+            ui.link("🔗 GitHub", "https://github.com/shiyao222333-afk/citrinitas").classes("text-xs text-blue-300")
             ui.button("⏻ 关机", on_click=lambda: os._exit(0)).props("flat dense color=red").classes("text-xs mt-2")
 
         return drawer
@@ -1008,7 +1008,7 @@ def page_config():
 
                 ui.separator()
                 ui.markdown("### 版本信息")
-                ui.label(f"Athanor: v{kb_query.__version__}")
+                ui.label(f"Citrinitas: v{kb_query.__version__}")
                 ui.label(f"NiceGUI: 3.13.0")
                 ui.label(f"Qdrant: {kb_query.QDRANT_URL}")
 
@@ -1059,7 +1059,7 @@ def _auto_shutdown():
         except Exception:
             idle += 1
             if idle >= IDLE_MAX:
-                print("\n[Athanor] 浏览器已关闭，自动退出。")
+                print("\n[Citrinitas] 浏览器已关闭，自动退出。")
                 os._exit(0)
 
 
@@ -1196,11 +1196,11 @@ def page_manage():
 
 if __name__ in {"__main__", "__mp_main__"}:
     ui.run(
-        title="Athanor · 熔知",
+        title="Citrinitas · 熔知",
         host="127.0.0.1",
         port=8080,
         reload=False,
         show=False,
-        storage_secret="athanor-mindforge-secret",
+        storage_secret="citrinitas-mindforge-secret",
         reconnect_timeout=120,  # 给 LLM/嵌入模型 充足加载时间
     )

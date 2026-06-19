@@ -10,7 +10,31 @@
 
 ## [Unreleased]
 
-*暂无。下一个版本 v0.4.5 将包含摄入管线深化功能（见 PROJECT_PLAN.md）。*
+*暂无。下一个版本 v0.4.5 将包含 P1 问题修复（见 PROJECT_PLAN.md）。*
+
+---
+
+## [v0.4.4] - 2026-06-18
+
+### Fixed
+- 🐛 XSS 漏洞：`_format_evidence_text()` 和 `_cell_html()` 未转义用户内容 → 先 `_html.escape()` 再还原 `$...$` 和 `[image:...]`
+- 🐛 `_render_report_html()` 中 synthesis 未转义 → 同样先 escape 再还原公式
+
+### Added
+- ✨ 新增文档管理页面 `/manage`：文档列表（分页）+ 查看详情 + 删除（含确认对话框）
+- ✨ `kb_query.py` 新增文档管理函数：`list_documents()` / `get_document()` / `delete_document()` / `update_document()`
+- ✨ 侧边栏新增「📄 文档管理」导航链接
+
+---
+
+## [v0.4.3] - 2026-06-18
+
+### Fixed
+- 🐛 language 字段永远默认 "zh" → Unicode 区块统计真检测（中/英/日/韩）
+- 🐛 `_split_long_paragraph()` 从未使用 overlap 参数 → 相邻 chunk 尾部→头部重叠拼接
+- 🐛 embed 逐条回退时单条失败整批丢弃 → 跳过失败块，≥50% 成功才写库
+- 🐛 source 字段在极端路径下可能为 None → 加 `or "unknown"` 兜底
+- 🐛 `_extract_images()` 仅识别 `[image: path]` → 新增 Markdown `![...](path)` + HTML `<img>` 三段提取
 
 ---
 

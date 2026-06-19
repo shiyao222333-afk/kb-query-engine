@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-sync_ima.py — IMA 知识库 → Athanor 同步脚本
+sync_ima.py — IMA 知识库 → Citrinitas 同步脚本
 
 功能：
   1. 通过 IMA MCP 连接器读取知识库内容
@@ -122,7 +122,7 @@ class IMABConnector:
 # ─────────────────────────────────────────
 
 class ContentConverter:
-    """将 IMA 知识库内容转换为 Athanor 可摄入的格式"""
+    """将 IMA 知识库内容转换为 Citrinitas 可摄入的格式"""
 
     @staticmethod
     def media_type_to_ext(media_type):
@@ -208,7 +208,7 @@ class ContentConverter:
 # ─────────────────────────────────────────
 
 class Ingestor:
-    """调用 kb_query.py 将文件摄入到 Athanor"""
+    """调用 kb_query.py 将文件摄入到 Citrinitas"""
 
     def __init__(self, kb_query_path, ocr_engine="paddle"):
         self.kb_query = Path(kb_query_path)
@@ -373,7 +373,7 @@ def verify_ingestion(query="测试", top_k=3):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="IMA 知识库 → Athanor 同步脚本",
+        description="IMA 知识库 → Citrinitas 同步脚本",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:

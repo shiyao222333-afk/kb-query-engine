@@ -1,1 +1,1 @@
-# config package for Athanor
+# config package for Citrinitas

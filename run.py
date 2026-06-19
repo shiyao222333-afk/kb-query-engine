@@ -1,5 +1,5 @@
 """
-Athanor 一键启动器
+Citrinitas 一键启动器
 用法: python run.py
 功能:
   1. 自动杀掉占用 8080 端口的旧 Python 进程
@@ -61,7 +61,7 @@ def clear_cache():
 
 if __name__ == "__main__":
     print("=" * 50)
-    print("  Athanor · 熔知 / MindForge")
+    print("  Citrinitas · 熔知")
     print("  NiceGUI v3.13.0")
     print("=" * 50)
 

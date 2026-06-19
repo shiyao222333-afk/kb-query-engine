@@ -1,13 +1,13 @@
 @echo off
-REM Athanor 启动脚本 — 自动杀掉旧进程再启动
+REM Citrinitas 启动脚本 — 自动杀掉旧进程再启动
 chcp 65001 >nul
 
 set PROJECT_DIR=%~dp0
 set PYTHON=C:\Python314\python.exe
-set PID_FILE=%PROJECT_DIR%.athanor.pid
+set PID_FILE=%PROJECT_DIR%.citrinitas.pid
 
 echo ========================================
-echo   Athanor · 熔知 启动脚本
+echo   Citrinitas · 熔知 启动脚本
 echo ========================================
 
 REM 1. 通过 PID 文件杀掉旧进程
@@ -41,11 +41,11 @@ for /f "tokens=2" %%a in ('tasklist ^| findstr "python.exe"') do (
 timeout /t 1 >nul
 
 REM 4. 启动服务
-echo [4/4] 启动 Athanor ...
+echo [4/4] 启动 Citrinitas ...
 echo       工作目录: %PROJECT_DIR%
 echo       访问地址: <ADDRESS_REDACTED>
 echo ========================================
 echo.
 
 cd /d "%PROJECT_DIR%"
-start "Athanor" "%PYTHON%" main.py
+start "Citrinitas" "%PYTHON%" main.py

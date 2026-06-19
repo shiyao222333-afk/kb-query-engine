@@ -568,8 +568,8 @@ def extract_auto_metadata(file_path: str, file_info: dict = None) -> dict:
         {
             "ok": bool,
             "metadata": {
-                "title": {"value": "...", "source": "file"},
-                "author": {"value": "...", "source": "file"},
+                "title": {"value": "...", "source": "file", "confidence": 1.0},
+                "author": {"value": "...", "source": "file", "confidence": 1.0},
                 ...
             },
             "flat": {  # 扁平版本，方便直接 merge
@@ -606,12 +606,16 @@ def extract_auto_metadata(file_path: str, file_info: dict = None) -> dict:
         return {"ok": False, "metadata": {}, "flat": {}, "source_count": 0,
                 "error": f"元数据提取失败: {e}"}
 
-    # 包装为 source-tagged 格式
+    # 包装为 source-tagged 格式（三元组：value + source + confidence）
     tagged = {}
     flat = {}
     for key, value in raw_meta.items():
         if value and str(value).strip():
-            tagged[key] = {"value": str(value).strip(), "source": "file"}
+            tagged[key] = {
+                "value": str(value).strip(),
+                "source": "file",
+                "confidence": 1.0,  # 文件自带元数据 — 确定性数据
+            }
             flat[key] = str(value).strip()
 
     return {

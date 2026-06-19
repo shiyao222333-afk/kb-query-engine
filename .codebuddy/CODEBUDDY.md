@@ -1,4 +1,4 @@
-# Athanor · 熔知 — 项目规范
+# Citrinitas · 熔知 — 项目规范
 
 ## 环境速查
 | 项目 | 值 |
@@ -11,7 +11,7 @@
 
 ## 启动
 ```bash
-cd /d/knowledge-forge
+cd /d/citrinitas
 /c/Python314/python.exe main.py
 ```
 或双击 `run.bat`

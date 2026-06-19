@@ -43,7 +43,7 @@ import uuid
 from datetime import datetime, timezone
 import tempfile
 
-__version__ = "0.4.2"
+__version__ = "0.4.4"
 
 try:
     from fpdf import FPDF
@@ -512,7 +512,7 @@ def ocr_image(image_path: str) -> dict:
     return {"ok": False, "error": "无法加载任何 OCR 引擎"}
 
 def _embed(texts: list[str], model: str = EMBED_MODEL) -> list[list[float]]:
-    """调用 Ollama 批量获取嵌入向量（优先批量，失败回退逐条）。"""
+    """调用 Ollama 批量获取嵌入向量（优先批量，失败回退逐条）。单条查询失败 → 抛异常，批量摄入失败 → 跳过。"""
     if not texts:
         return []
     # 尝试批量 API（Ollama /api/embed 支持 input 数组）
@@ -528,17 +528,50 @@ def _embed(texts: list[str], model: str = EMBED_MODEL) -> list[list[float]]:
             return embeddings
     except Exception:
         pass  # 回退到逐条
-    # 逐条回退
+    # 逐条回退 — 单条查询失败抛异常，批量摄入失败跳过
     vectors = []
-    for text in texts:
-        resp = requests.post(
-            f"{OLLAMA_URL}/api/embeddings",
-            json={"model": model, "prompt": text},
-            timeout=60
-        )
-        resp.raise_for_status()
-        vectors.append(resp.json()["embedding"])
+    for i, text in enumerate(texts):
+        try:
+            resp = requests.post(
+                f"{OLLAMA_URL}/api/embeddings",
+                json={"model": model, "prompt": text},
+                timeout=60
+            )
+            resp.raise_for_status()
+            vectors.append(resp.json()["embedding"])
+        except Exception:
+            if len(texts) == 1:
+                raise  # 单条查询：必须传播错误
+            print(f"  [WARN] 块 #{i} 嵌入失败（{len(text)} 字符），已跳过")
     return vectors
+
+
+def _detect_language(text: str) -> str:
+    """通过 Unicode 区块统计检测语言（前 2000 字）。"""
+    sample = text[:2000]
+    if not sample.strip():
+        return "zh"
+    total = len(sample)
+    cjk = sum(1 for c in sample if '\u4e00' <= c <= '\u9fff' or '\u3400' <= c <= '\u4dbf')
+    hiragana = sum(1 for c in sample if '\u3040' <= c <= '\u309f')
+    katakana = sum(1 for c in sample if '\u30a0' <= c <= '\u30ff')
+    hangul = sum(1 for c in sample if '\uac00' <= c <= '\ud7af')
+    latin = sum(1 for c in sample if c.isascii() and c.isalpha())
+
+    cjk_ratio = cjk / total
+    ja_ratio = (hiragana + katakana) / total
+    ko_ratio = hangul / total
+    en_ratio = latin / total
+
+    if cjk_ratio >= 0.30:
+        return "zh"
+    if ja_ratio >= 0.10:
+        return "ja"
+    if ko_ratio >= 0.10:
+        return "ko"
+    if en_ratio >= 0.60:
+        return "en"
+    return "zh"  # 兜底
 
 
 def _check_qdrant() -> bool:
@@ -1035,8 +1068,22 @@ def _source_to_meta(source: str) -> dict:
 
 
 def _extract_images(text: str) -> list[str]:
-    """提取文本中的 [image: path] 引用路径列表"""
-    return re.findall(r'\[image:\s*([^\]]+)\]', text)
+    """提取文本中的图片引用（支持 3 种格式：[:image:] / Markdown / HTML）。"""
+    images = []
+    # 格式1: [image: path]
+    images.extend(re.findall(r'\[image:\s*([^\]]+)\]', text))
+    # 格式2: Markdown ![alt](path)
+    images.extend(re.findall(r'!\[.*?\]\(([^\)]+)\)', text))
+    # 格式3: HTML <img src="path">
+    images.extend(re.findall(r'<img[^>]+src=["\']([^"\']+)["\']', text, re.IGNORECASE))
+    # 去重（保持顺序）
+    seen = set()
+    unique = []
+    for img in images:
+        if img not in seen:
+            seen.add(img)
+            unique.append(img)
+    return unique
 
 
 def _ensure_images_dir():
@@ -1122,6 +1169,14 @@ def _split_long_paragraph(text: str, max_chars: int, overlap: int) -> list[str]:
                 current = sent
     if current:
         chunks.append(current)
+    # ── overlap：相邻 chunk 尾部 → 头部拼接 ──
+    # 原子块已在上层 _chunk_text() 由占位符保护，overlap 不会破坏它们
+    if overlap > 0 and len(chunks) > 1:
+        overlapped = [chunks[0]]
+        for i in range(1, len(chunks)):
+            prev_tail = chunks[i-1][-overlap:] if len(chunks[i-1]) >= overlap else chunks[i-1]
+            overlapped.append(prev_tail + "\n\n" + chunks[i])
+        return overlapped
     return chunks
 
 
@@ -1165,6 +1220,7 @@ def ingest(
         source = metadata.get("source", "直接输入") if metadata else "直接输入"
     else:
         return {"ok": False, "error": "请提供 file_path 或 text"}
+    source = source or "unknown"  # 防御性兜底
 
     if not text or not text.strip():
         return {"ok": False, "error": "文本内容为空"}
@@ -1214,19 +1270,23 @@ def ingest(
     except Exception as e:
         return {"ok": False, "error": f"嵌入失败: {e}"}
 
-    # ── 获取下一个可用的 point ID ──
-    try:
-        existing = requests.get(
-            f"{QDRANT_URL}/collections/{collection}",
-            timeout=5
-        ).json()
-        next_id = existing["result"]["points_count"]
-    except Exception:
-        next_id = 0
+    # ── 嵌入容错：至少 50% 成功才写入 ──
+    if not vectors:
+        return {"ok": False, "error": "所有块嵌入失败"}
+    if len(vectors) < len(chunks) * 0.5:
+        return {
+            "ok": False,
+            "error": f"嵌入成功率过低 ({len(vectors)}/{len(chunks)})，已中止"
+        }
+    # 对齐：vectors 可能少于 chunks（部分失败跳过），取前 N 个匹配
+    if len(vectors) < len(chunks):
+        print(f"  [WARN] {len(chunks) - len(vectors)}/{len(chunks)} 块嵌入失败，已跳过")
+        chunks = chunks[:len(vectors)]
 
     # ── 构建 Qdrant points（v4.0 分组字段结构）──
     base_meta = metadata or {}
-    doc_id = base_meta.get("doc_id", str(uuid.uuid4())[:8])
+    # doc_id: 文档级唯一标识（完整 UUID，非截短）
+    doc_id = base_meta.get("doc_id") or str(uuid.uuid4())
     ingested_at = datetime.now(timezone.utc).isoformat()
     full_text_hash = _text_hash(text)
 
@@ -1268,14 +1328,17 @@ def ingest(
     related_product = base_meta.get("related_product", "")
 
     # ── 系统字段 ──
-    language     = base_meta.get("language", "zh")
+    language     = base_meta.get("language") or _detect_language(text)
     access_level = base_meta.get("access_level", "private")
     batch_id     = base_meta.get("batch_id", "")
+    needs_review = base_meta.get("needs_review", False)  # 置信度路由标记
 
     points = []
     for i, (chunk, vec) in enumerate(zip(chunks, vectors)):
+        # 每个 chunk 用随机 64-bit ID（不依赖 Qdrant points_count，零并发冲突）
+        point_id = uuid.uuid4().int >> 64
         points.append({
-            "id": next_id + i,
+            "id": point_id,
             "vector": vec,
             "payload": {
                 # ── 内容字段 ──
@@ -1285,6 +1348,7 @@ def ingest(
                 "chunk_index": i,
                 "total_chunks": len(chunks),
                 "doc_id": doc_id,
+                "doc_uid": doc_id,  # 稳定文档标识（= doc_id，未来去重键）
                 "content_hash": full_text_hash,
                 "images": valid_images,
 
@@ -1342,6 +1406,7 @@ def ingest(
                 "access_level": access_level,
                 "batch_id": batch_id,
                 "is_archived": False,
+                "needs_review": needs_review,
 
                 # ── 预留扩展字段 ──
                 "ext_text1": None, "ext_text2": None, "ext_text3": None,
@@ -1617,7 +1682,9 @@ def auto_classify(text: str) -> dict:
       {
         "ok": true/false,
         "classification": {content_type, domain[], lifecycle, trust_score,
-                           keywords[], title, author, knowledge_type},
+                           keywords[], title, author, knowledge_type,
+                           temporal_nature, epistemic_status, udc_code,
+                           auto_summary, is_personal, confidence},
         "raw_response": "LLM原始输出(调试用)"
       }
     """
@@ -1682,9 +1749,15 @@ def auto_classify(text: str) -> dict:
 
 ### udc_code（UDC 细分码，可选）— 如果有足够信息，输出更精确的 UDC 类号，如 "621.39"、"004.8"、复合码 "621:004.8"。无法确定则留空 ""
 
+### auto_summary（自动摘要）— 用一句话（≤100字）概括本条内容的核心信息
+
+### is_personal（是否个人化）— true 表示个人经验/笔记/主观观点，false 表示客观内容/标准/论文
+
+### confidence（置信度）— 对你给出的每个分类字段的自信程度，0.0 完全不确定 ~ 1.0 非常确定。必须包含 overall 和每个字段的评分。
+
 ## 输出格式
 严格输出以下 JSON，不要包含任何额外文字、不要用 ```json 包裹、不要加注释：
-{{"content_type":"standard","domain":["0","6"],"lifecycle":"published","temporal_nature":"evergreen","epistemic_status":"corroborated","trust_score":4,"knowledge_type":"","keywords":["齿轮","模数","强度"],"title":"渐开线圆柱齿轮 模数系列","author":"GB/T 1357-2008","udc_code":"621"}}"""
+{{"content_type":"standard","domain":["0","6"],"lifecycle":"published","temporal_nature":"evergreen","epistemic_status":"corroborated","trust_score":4,"knowledge_type":"","keywords":["齿轮","模数","强度"],"title":"渐开线圆柱齿轮 模数系列","author":"GB/T 1357-2008","udc_code":"621","auto_summary":"中国国家标准 GB/T 1357-2008，规定渐开线圆柱齿轮的模数系列。","is_personal":false,"confidence":{{"overall":0.92,"fields":{{"content_type":0.95,"domain":0.88,"temporal_nature":0.90,"epistemic_status":0.98,"lifecycle":0.85,"trust_score":0.80,"knowledge_type":0.95,"title":0.97,"author":0.99,"udc_code":0.90}}}}}}"""
 
     try:
         raw = _call_llm_api(
@@ -1739,6 +1812,9 @@ def auto_classify(text: str) -> dict:
         "title": result.get("title", ""),
         "author": result.get("author", ""),
         "udc_code": result.get("udc_code", ""),
+        "auto_summary": result.get("auto_summary", ""),
+        "is_personal": result.get("is_personal", False),
+        "confidence": result.get("confidence", None),
     }
 
     # 校验 content_type（非法值用默认）
@@ -1785,6 +1861,27 @@ def auto_classify(text: str) -> dict:
     # 校验 title/author（确保是 str）
     classification["title"] = str(classification["title"]).strip()[:100]
     classification["author"] = str(classification["author"]).strip()[:100]
+
+    # 校验 auto_summary（确保是 str，截断到 200 字）
+    classification["auto_summary"] = str(classification.get("auto_summary", "")).strip()[:200]
+
+    # 校验 is_personal（确保是 bool）
+    ip_val = classification.get("is_personal", False)
+    if isinstance(ip_val, str):
+        classification["is_personal"] = ip_val.strip().lower() in ("true", "yes", "1")
+    else:
+        classification["is_personal"] = bool(ip_val)
+
+    # 校验 confidence（标准化结构，缺失则回退到默认值）
+    conf = classification.get("confidence")
+    if isinstance(conf, dict) and isinstance(conf.get("overall"), (int, float)):
+        classification["confidence"] = {
+            "overall": max(0.0, min(1.0, float(conf["overall"]))),
+            "fields": conf.get("fields", {}),
+        }
+    else:
+        # LLM 未返回置信度 → 默认整体 0.5，字段不标记
+        classification["confidence"] = {"overall": 0.5, "fields": {}}
 
     return {
         "ok": True,
@@ -2184,12 +2281,15 @@ def _render_report_html(query: str, synthesis: str, chunks: list, output_dir: st
         # 非表格文本：逐行处理
         result = []
         for line in lines:
-            escaped = line  # _html.escape(line)  # 已移除：保留 $...$ 供 MathJax
+            # 先转义 HTML（防 XSS），再还原公式和图片引用
+            escaped = _html.escape(line)
+            # 还原 [image: ...] → <img> 标签
             escaped = re.sub(
                 r'\[image:\s*([^\]]+)\]',
                 lambda m: _img_tag(m.group(1).strip()),
                 escaped
             )
+            # 还原 $...$ 和 $$...$$ → formula <span>
             escaped = _formula_to_html_spans(escaped)
             result.append(escaped)
         return '\n'.join(result)
@@ -2197,10 +2297,11 @@ def _render_report_html(query: str, synthesis: str, chunks: list, output_dir: st
     def _pipe_table_to_html(pipe_lines: list) -> str:
         """将 Markdown 管道表格行列表转为 HTML <table>。列宽由内容预计算。"""
         def _cell_html(raw: str) -> str:
-            """处理 table cell: [image: ...] → <img>，$...$ 包裹 formula span 供 KaTeX 后处理。"""
-            s = raw
+            """处理 table cell: 先转义HTML防XSS，再还原公式和图片引用。"""
+            s = _html.escape(raw)
+            # 还原公式 $...$ 和 $$...$$
             s = _formula_to_html_spans(s)
-            # 图片引用
+            # 还原图片引用 [image: ...] → <img>
             s = re.sub(r'\[image:\s*(.+?)\]', lambda m: _img_tag(m.group(1).strip()), s)
             return s
 
@@ -2827,6 +2928,285 @@ def get_doc_ids(
 # ═══════════════════════════════════════════
 # CLI
 # ═══════════════════════════════════════════
+# ═════════════════════════════════════════
+# 文档管理函数 (v4.0)
+# ═════════════════════════════════════════
+
+def list_documents(collection: str = DEFAULT_COLLECTION,
+                  page: int = 1,
+                  page_size: int = 20) -> dict:
+    """
+    列出知识库中的去重文档（分页）。
+    按 doc_uid 去重，每个文档取 chunk_index=0 的元数据作为代表。
+
+    返回：
+        {
+            "ok": True,
+            "documents": [...],
+            "total": N,
+            "page": 1,
+            "page_size": 20,
+            "total_pages": N,
+        }
+    """
+    if not _check_qdrant():
+        return {"ok": False, "error": "Qdrant 未运行"}
+
+    try:
+        # 获取总数
+        info = requests.get(f"{QDRANT_URL}/collections/{collection}", timeout=5)
+        if info.status_code != 200:
+            return {"ok": False, "error": f"集合 {collection} 不存在"}
+        total_pts = info.json()["result"]["points_count"]
+
+        if total_pts == 0:
+            return {
+                "ok": True,
+                "documents": [],
+                "total": 0,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": 0,
+            }
+
+        # 分页 scroll 收集去重文档（取每个 doc_uid 的第一个 chunk）
+        scroll_limit = 1000
+        offset = 0
+        seen = {}
+        # seen[doc_uid] = {metadata from first chunk}
+
+        while True:
+            resp = requests.post(
+                f"{QDRANT_URL}/collections/{collection}/points/scroll",
+                json={"limit": scroll_limit, "offset": offset,
+                      "with_payload": True, "with_vector": False},
+                timeout=30,
+            )
+            batch = resp.json()["result"]["points"] if resp.status_code == 200 else []
+            if not batch:
+                break
+
+            for p in batch:
+                pl = p.get("payload", {})
+                did = pl.get("doc_uid", "")
+                if not did:
+                    continue
+                if did not in seen:
+                    seen[did] = {
+                        "doc_uid": did,
+                        "title": pl.get("title", "") or pl.get("source", "未知"),
+                        "source": pl.get("source", ""),
+                        "content_type": pl.get("content_type", ""),
+                        "domain": pl.get("domain", []),
+                        "temporal_nature": pl.get("temporal_nature", ""),
+                        "epistemic_status": pl.get("epistemic_status", ""),
+                        "trust_score": pl.get("trust_score", 3),
+                        "is_personal": pl.get("is_personal", False),
+                        "chunk_count": 1,
+                        "created_at": pl.get("created_at", ""),
+                    }
+                else:
+                    seen[did]["chunk_count"] += 1
+
+            offset += len(batch)
+            if offset >= total_pts:
+                break
+
+        # 转成列表，按 created_at 降序
+        docs = list(seen.values())
+        docs.sort(key=lambda d: d.get("created_at", ""), reverse=True)
+
+        total = len(docs)
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        page = max(1, min(page, total_pages))
+        start = (page - 1) * page_size
+        end = start + page_size
+
+        return {
+            "ok": True,
+            "documents": docs[start:end],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+        }
+
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def get_document(doc_uid: str, collection: str = DEFAULT_COLLECTION) -> dict:
+    """
+    获取指定文档的所有分块。
+    返回：
+        {"ok": True, "doc_uid": "...", "chunks": [{text, ...}, ...]}
+    """
+    if not _check_qdrant():
+        return {"ok": False, "error": "Qdrant 未运行"}
+
+    try:
+        # 使用 scroll + filter 获取该 doc_uid 的所有 points
+        all_points = []
+        scroll_limit = 1000
+        offset = 0
+
+        while True:
+            filter_obj = {"must": [{"key": "doc_uid", "match": {"value": doc_uid}}]}
+            resp = requests.post(
+                f"{QDRANT_URL}/collections/{collection}/points/scroll",
+                json={"limit": scroll_limit, "offset": offset,
+                      "filter": filter_obj,
+                      "with_payload": True, "with_vector": False},
+                timeout=30,
+            )
+            batch = resp.json()["result"]["points"] if resp.status_code == 200 else []
+            if not batch:
+                break
+            all_points.extend(batch)
+            offset += len(batch)
+            if len(batch) < scroll_limit:
+                break
+
+        if not all_points:
+            return {"ok": False, "error": f"文档 {doc_uid} 不存在"}
+
+        chunks = []
+        for p in all_points:
+            pl = p.get("payload", {})
+            chunks.append({
+                "chunk_index": pl.get("chunk_index", 0),
+                "text": pl.get("text", ""),
+                "title": pl.get("title", ""),
+                "source": pl.get("source", ""),
+                "content_type": pl.get("content_type", ""),
+                "domain": pl.get("domain", []),
+                "images": pl.get("images", []),
+            })
+
+        chunks.sort(key=lambda c: c["chunk_index"])
+        return {"ok": True, "doc_uid": doc_uid, "chunks": chunks}
+
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def delete_document(doc_uid: str, collection: str = DEFAULT_COLLECTION) -> dict:
+    """
+    删除指定文档的所有分块。
+    返回：
+        {"ok": True, "deleted": N}
+    """
+    if not _check_qdrant():
+        return {"ok": False, "error": "Qdrant 未运行"}
+
+    try:
+        # 先获取所有匹配的点 ID
+        point_ids = []
+        scroll_limit = 1000
+        offset = 0
+
+        while True:
+            filter_obj = {"must": [{"key": "doc_uid", "match": {"value": doc_uid}}]}
+            resp = requests.post(
+                f"{QDRANT_URL}/collections/{collection}/points/scroll",
+                json={"limit": scroll_limit, "offset": offset,
+                      "filter": filter_obj,
+                      "with_payload": False, "with_vector": False},
+                timeout=30,
+            )
+            batch = resp.json()["result"]["points"] if resp.status_code == 200 else []
+            if not batch:
+                break
+            point_ids.extend([p["id"] for p in batch])
+            offset += len(batch)
+            if len(batch) < scroll_limit:
+                break
+
+        if not point_ids:
+            return {"ok": False, "error": f"文档 {doc_uid} 不存在"}
+
+        # 批量删除（每批 1000）
+        deleted = 0
+        for i in range(0, len(point_ids), 1000):
+            batch_ids = point_ids[i:i+1000]
+            del_resp = requests.post(
+                f"{QDRANT_URL}/collections/{collection}/points/delete",
+                json={"points": batch_ids},
+                timeout=30,
+            )
+            if del_resp.status_code == 200:
+                deleted += len(batch_ids)
+
+        return {"ok": True, "deleted": deleted, "doc_uid": doc_uid}
+
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def update_document(doc_uid: str, metadata: dict,
+                   collection: str = DEFAULT_COLLECTION) -> dict:
+    """
+    更新指定文档所有分块的元数据。
+    metadata 中的字段会覆盖所有分块的对应字段。
+
+    返回：
+        {"ok": True, "updated": N}
+    """
+    if not _check_qdrant():
+        return {"ok": False, "error": "Qdrant 未运行"}
+
+    try:
+        # 先获取所有匹配的点
+        all_points = []
+        scroll_limit = 1000
+        offset = 0
+
+        while True:
+            filter_obj = {"must": [{"key": "doc_uid", "match": {"value": doc_uid}}]}
+            resp = requests.post(
+                f"{QDRANT_URL}/collections/{collection}/points/scroll",
+                json={"limit": scroll_limit, "offset": offset,
+                      "filter": filter_obj,
+                      "with_payload": True, "with_vector": True},
+                timeout=30,
+            )
+            batch = resp.json()["result"]["points"] if resp.status_code == 200 else []
+            if not batch:
+                break
+            all_points.extend(batch)
+            offset += len(batch)
+            if len(batch) < scroll_limit:
+                break
+
+        if not all_points:
+            return {"ok": False, "error": f"文档 {doc_uid} 不存在"}
+
+        # 更新 payload
+        updated = 0
+        for p in all_points:
+            pid = p["id"]
+            vector = p.get("vector", [])
+            payload = p.get("payload", {})
+            payload.update(metadata)
+            # 写回 Qdrant（覆盖原 point）
+            requests.put(
+                f"{QDRANT_URL}/collections/{collection}/points",
+                json={
+                    "points": [{"id": pid, "vector": vector, "payload": payload}]
+                },
+                timeout=30,
+            )
+            updated += 1
+
+        return {"ok": True, "updated": updated, "doc_uid": doc_uid}
+
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+# ═════════════════════════════════════════
+# CLI 入口
+# ═════════════════════════════════════════
 
 if __name__ == "__main__":
     # 修复 Windows GBK 环境下 print 非 ASCII 字符崩溃问题

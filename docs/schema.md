@@ -1,15 +1,21 @@
-# Athanor 知识库字段设计文档（Schema v5.0）
+# Athanor 知识库字段设计文档（Schema v5.1）
 
-> ⚠️ **文档版本说明**：本文档追踪**字段设计**的版本（v1.0 → v2.0 → v4.0 → v5.0），
+> ⚠️ **文档版本说明**：本文档追踪**字段设计**的版本（v1.0 → v2.0 → v4.0 → v5.0 → v5.1），
 > 独立于项目版本。项目版本见 [PROJECT_PLAN.md](../PROJECT_PLAN.md)。
 
 > 分面分类（Faceted Classification）+ 分组字段设计
-> 总字段数：36 个（含 10 个预留扩展字段）
+> 总字段数：36 个（28 个活跃字段 + 10 个预留扩展槽位）
 >
 > 设计原则：
 > - 语义相近的字段聚合成分组对象（relations / timeline / origin / stats）
 > - 减少扁平字段数，提高可读性和可维护性
-> - 预留扩展字段覆盖未来未知需求
+> - 预留扩展槽位覆盖未来未知需求
+> - 所有活跃字段 100% 自动填充，无需人工介入（四象限来源：文件自带 / AI推断 / 程序生成 / 智能默认值）
+>
+> v5.1 变更（2026-06-17）：
+> - 明确 36 字段 = 28 活跃 + 10 扩展槽位
+> - 新增四象限字段来源分类（见文档 §七）
+> - 确立 title/author 字段的填充优先级：文件自带 > AI 推断 > 程序兜底
 >
 > v5.0 重大变更（2026-06-16）：
 > - domain: 自定义9域 → UDC 9主类（国际十进分类法）
@@ -109,7 +115,7 @@ LLM 自由输出任意精度的 UDC 类号，如 `"621"` / `"621.39"` / `"621:00
 
 ---
 
-## 三、完整字段表（36 个）
+## 三、完整字段表（28 活跃 + 10 扩展槽位）
 
 ### 内容字段（5）
 
@@ -184,7 +190,7 @@ LLM 自由输出任意精度的 UDC 类号，如 `"621"` / `"621.39"` / `"621:00
 | `target_platform` | string | 目标发布平台 |
 | `related_product` | string | 关联产品 |
 
-### 系统字段（5）
+### 系统字段（5 个活跃 + 1 审核标记）
 
 | 字段名 | 类型 | 说明 |
 |--------|------|------|
@@ -195,8 +201,12 @@ LLM 自由输出任意精度的 UDC 类号，如 `"621"` / `"621.39"` / `"621:00
 | `is_archived` | boolean | 是否归档 |
 | `batch_id` | string | 批次 ID |
 | `version` | string | 版本标识 |
+| `needs_review` | boolean | 置信度路由标记，低置信度入库时需要审核（默认 false） |
 
-### 预留扩展字段（10）
+### 预留扩展槽位（10，不计入活跃字段数）
+
+> 这些是 Qdrant schema 的扩展槽位，当前全部为 `null`。
+> 新增字段时优先用它们，无需修改 Qdrant collection schema。
 
 | 字段名 | 类型 | 用途 |
 |--------|------|------|
@@ -269,6 +279,7 @@ LLM 自由输出任意精度的 UDC 类号，如 `"621"` / `"621.39"` / `"621:00
 | `language` | keyword | 语言过滤 |
 | `access_level` | keyword | 权限过滤 |
 | `project_source` | keyword | 普通字段（未来可升级） |
+| `needs_review` | bool | 审核标记（知识中枢页面筛选待审核条目） |
 
 ---
 
@@ -276,7 +287,93 @@ LLM 自由输出任意精度的 UDC 类号，如 `"621"` / `"621.39"` / `"621:00
 
 | 版本 | 日期 | 变更内容 |
 |------|------|----------|
+| v5.1 | 2026-06-17 | 明确 36 = 28活跃+10扩展槽位；四象限来源分类；title/author 填充优先级（文件>AI>程序） |
 | v5.0 | 2026-06-16 | domain → UDC 9主类；分面3 temporal_nature(3级)；分面4 epistemic_status(3级/L0-L2)；lifecycle/project_source 降级普通字段；移除 objectivity；新增 udc_code 普通字段 |
 | v4.0 | 2026-06-15 | 36字段分组方案：content_type 15种、domain 9种、knowledge_type 11种；新增 relations/timeline/origin/stats 分组字段；新增 keywords/auto_summary/batch_id/is_archived/version；删除 content_stage/task_id/updated_at/quality_score/category |
 | v2.0 | 2026-06-15 | 重写字段设计，采用分面分类方案 |
 | v1.0 | 2026-05-xx | 初始版本（层级分类法，已废弃） |
+
+---
+
+## 七、字段来源四象限（Field Source Classification）
+
+所有 28 个活跃字段**100% 自动填充**，按来源分为四类：
+
+### 象限一：文件自带（File-originated）— 置信度 1.0
+
+从文件的元数据层提取，确定性数据。**优先级最高**，当与 AI 推断冲突时，文件自带优先。
+
+| 字段 | 提取来源 |
+|------|----------|
+| `title` | EPUB/PDF 元数据 / HTML `<title>` / DOCX core_properties |
+| `origin.author` | EPUB creator / PDF author / DOCX author |
+| `origin.source_url` | HTML `<link rel="canonical">` |
+| `origin.file_type` | 文件扩展名推断 |
+| `source` | 文件 basename |
+| `timeline.published` | EPUB date / PDF CreationDate / EXIF DateTimeOriginal |
+| `version` | 文件名模式匹配（如 `GB/T 1357-2008`） |
+| `timeline.effective` | 同 `published`（法律/合同类文档可能不同） |
+
+### 象限二：AI 推断（AI-inferred）— 置信度由 LLM 返回
+
+LLM 分析文本语义推断的字段。**后备来源**：文件无 `title`/`author` 时，AI 尝试从正文推断。
+
+| 字段 | 推断方式 |
+|------|----------|
+| `content_type` | 文本语义 → 15 选 1 |
+| `domain` | 文本主题 → UDC 9 选 N |
+| `temporal_nature` | 文本时效特征 → 3 选 1 |
+| `epistemic_status` | 文本引用/证据 → 3 选 1 |
+| `udc_code` | 文本精确主题 → UDC 细分码 |
+| `keywords` | 提取 3-8 个关键词 |
+| `auto_summary` | 生成 ≤100 字摘要 |
+| `trust_score` | 评估来源权威度 1-5 |
+| `knowledge_type` | 仅 content_type=knowledge 时推断子类型 |
+| `is_personal` | 判断是否个人经验 |
+| `lifecycle` | 推断工作流阶段（默认 `published`） |
+
+### 象限三：程序自动生成（System-generated）— 置信度 1.0
+
+纯代码逻辑，确定性输出，无需任何推断。
+
+| 字段 | 生成方式 |
+|------|----------|
+| `doc_id` | UUID 前 8 位 |
+| `content_hash` | SHA256 |
+| `text` | 文件解析（txt/md 直接读、EPUB/PDF/DOCX 解包） |
+| `chunk_index` | 分块序号 0, 1, 2... |
+| `images` | 正则提取 `![](path)` 引用并验证 |
+| `language` | `langdetect` 库检测 |
+| `timeline.ingested` | `datetime.now(timezone.utc)` |
+| `timeline.accessed` | 初始 `null`，查询时更新 |
+| `stats.access_count` | 初始 `0` |
+| `stats.starred` | 初始 `false` |
+| `origin.ingest_method` | `"upload"` / `"manual"` / `"api"` |
+| `is_canonical` | 默认 `true`（第一个 chunk） |
+| `access_level` | 默认 `"private"` |
+| `is_archived` | 默认 `false` |
+| `batch_id` | 批次 ID（批量摄入时生成） |
+
+### 象限四：智能默认值（Smart defaults）— 置信度 0.0
+
+当前无法自动确定，填入占位值等待未来进化。
+
+| 字段 | 默认值 | 未来可能来源 |
+|------|--------|--------------|
+| `project_source` | `""` | 引擎配置的项目列表 |
+| `target_platform` | `"none"` | 内容发布（Elixir 模块） |
+| `related_product` | `""` | 产品关联（Crucible 模块） |
+| `tags` | `[]` | 用户自定义（远期） |
+| `relations` | `[]` | 知识图谱（Crucible 模块） |
+| `timeline.expiry` | `null` | `temporal_nature=timeboxed` 时 AI 推断 |
+| 预留扩展槽位 ×10 | `null` | 按需启用 |
+
+### 填充优先级
+
+对同一字段有多个来源时（如 `title` 可能来自文件元数据也可能来自 AI 推断）：
+
+```
+文件自带（最高） → AI 推断（后备） → 智能默认值（兜底）
+```
+
+程序自动生成的字段与其他三类无重叠，不存在优先级冲突。
