@@ -2011,11 +2011,40 @@ def auto_classify(text: str, metadata: dict = None) -> dict:
     # L1（模板默认）：如果 metadata 已提供值，优先使用
     result = metadata.copy() if metadata else {}
     
-    # L2（文件元数据）：无文件扩展名信息，跳过
+    # 关键词→domain 映射表（L2/L3 共用）
+    keyword_domain_map = {
+        "齿轮|模数|强度|公差|机械设计": ["6"],
+        "ai|llm|模型|深度学习|神经网络": ["0"],
+        "标准|国标|iso|gb/t": ["0", "6"],
+        "公式|定理|数学": ["5"],
+        "程序|代码|python|javascript": ["0"],
+        "设计|ux|ui|排版": ["7"],
+    }
+    
+    # L2（文件元数据）：从 metadata 提取关键词，推断 domain
+    if "domain" not in result or not result["domain"]:
+        # 从 metadata 提取可用来推断 domain 的字段
+        meta_text = " ".join([
+            str(metadata.get("title", "")),
+            str(metadata.get("author", "")),
+            " ".join(metadata.get("keywords", [])),
+            metadata.get("source", ""),
+        ]).lower()
+        # 复用 keyword_domain_map
+        for kw_pattern, domains in keyword_domain_map.items():
+            if any(kw in meta_text for kw in kw_pattern.split("|")):
+                result["domain"] = domains
+                break
     
     # L3（关键词匹配）：根据文本内容推断 domain
-    text_lower = text.lower()
-    keyword_domain_map = {
+    if "domain" not in result or not result["domain"]:
+        text_lower = text.lower()
+        for kw_pattern, domains in keyword_domain_map.items():
+            if any(kw in text_lower for kw in kw_pattern.split("|")):
+                result["domain"] = domains
+                break
+    
+    # L4（LLM 推断）：...
         "齿轮|模数|强度|公差|机械设计": ["6"],
         "ai|llm|模型|深度学习|神经网络": ["0"],
         "标准|国标|iso|gb/t": ["0", "6"],
