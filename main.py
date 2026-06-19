@@ -1196,6 +1196,21 @@ def page_manage():
     with ui.column().classes("w-full p-6"):
         ui.markdown("# 📄 文档管理")
         ui.markdown("*查看、删除知识库中的文档。*")
+        # ── 过滤器 ──
+        with ui.row().classes('w-full gap-4 items-center mb-4'):
+            ui.label('过滤器：').classes('font-bold')
+            filter_select = ui.select(
+                options=['全部文档', '待审核', '已审核'],
+                value='全部文档',
+                label='审核状态'
+            ).classes('w-64')
+            def _on_filter_change():
+                val = filter_select.value
+                nr = None if val == '全部文档' else (True if val == '待审核' else False)
+                page_state['needs_review'] = nr
+                load_docs(1)
+            filter_select.on('update:model-value', lambda e: _on_filter_change())
+
 
         if not STATE["qdrant_online"]:
             ui.badge("⚠️ Qdrant 离线，无法管理。", color="red")
@@ -1252,10 +1267,12 @@ def page_manage():
         def load_docs(page: int):
             """加载指定页。"""
             page = max(1, page)
+            nr = page_state.get("needs_review", None)
             res = kb_query.list_documents(
                 STATE["active_collection"],
                 page=page,
                 page_size=page_state["page_size"],
+                needs_review=nr,
             )
             if not res.get("ok"):
                 ui.notify(f"加载失败: {res.get('error', '')}", type="negative")
