@@ -167,8 +167,8 @@ EMBED_PRESETS = {
 # 共享 UI 函数
 # ═══════════════════════════════════════════
 
-_DRAWER_BUILT = False  # 防止多页面重复构建抽屉/定时器
 _STATUS_WIDGETS = {}   # 状态栏控件引用（供 app.timer 回调更新）
+_GLOBAL_TIMER = None   # app.timer 只创建一次
 
 def _status_tick():
     """全局状态刷新回调（由 app.timer 每10秒触发，独立于任何UI元素）。"""
@@ -198,11 +198,8 @@ def _status_tick():
 
 
 def build_left_drawer():
-    """构建左侧导航抽屉（所有页面共用）。只构建一次，避免重复创建定时器等元素。"""
-    global _DRAWER_BUILT
-    if _DRAWER_BUILT:
-        return
-    _DRAWER_BUILT = True
+    """构建左侧导航抽屉（所有页面共用）。"""
+    global _GLOBAL_TIMER
     with ui.left_drawer(value=True, fixed=False, bordered=True).classes("bg-gray-900 text-white") as drawer:
         with ui.column().classes("w-full items-center p-4"):
             ui.markdown("## 🏭 Citrinitas")
@@ -244,10 +241,11 @@ def build_left_drawer():
 
             ui.button("🔄 刷新", on_click=_update_status).props("flat dense").classes("text-xs")
 
-            # 全局定时器（app.timer 独立于UI，页面切换不会报 parent slot deleted）
-            global _STATUS_WIDGETS
+            # 全局定时器（app.timer 独立于UI，只创建一次）
+            global _STATUS_WIDGETS, _GLOBAL_TIMER
             _STATUS_WIDGETS.update(badge=status_badge, points=points_label, dim=dim_label)
-            app.timer(10.0, _status_tick)
+            if _GLOBAL_TIMER is None:
+                _GLOBAL_TIMER = app.timer(10.0, _status_tick)
 
         ui.separator()
 
