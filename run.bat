@@ -38,7 +38,7 @@ echo [3/4] Qdrant...
 tasklist /FI "IMAGENAME eq qdrant.exe" 2>NUL | find /I "qdrant.exe" >NUL
 if %ERRORLEVEL% NEQ 0 (
     if exist "D:\qdrant\qdrant.exe" (
-        start "Qdrant" /MIN D:\qdrant\qdrant.exe --config-path "D:\qdrant\config\config.yaml"
+        powershell -Command "Start-Process 'D:\qdrant\qdrant.exe' -ArgumentList '--config-path','D:\qdrant\config\config.yaml' -WindowStyle Hidden"
         echo   Qdrant started (port 6333)
         timeout /t 3 /nobreak > nul
     ) else (
