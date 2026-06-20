@@ -8,6 +8,29 @@
 
 ---
 
+## 版本号说明
+
+> 本文档是版本变更的唯一事实来源。PROJECT_PLAN.md 的「版本路线图表」是未来版本规划的权威参考。
+
+### v0.5.0 定义变更记录
+
+v0.5.0 初始规划为「快速开始优化」，实际执行时需求变更为「L2 管道（文件元数据→UDC 推断）+ `normalize_facet_values()` 模糊映射」。从 v0.6.0 起，版本规划严格按 PROJECT_PLAN.md 路线图表执行，不再中途变更定义。
+
+### 版本类型定义
+
+| 标签 | 含义 |
+|------|------|
+| `Added` | 新功能 |
+| `Fixed` | Bug 修复 |
+| `Changed` | 功能变更 |
+| `Deprecated` | 即将移除的功能 |
+| `Removed` | 已移除的功能 |
+| `Security` | 安全问题 |
+
+**历史版本说明**：v0.3.0 及之前版本在同一版本中混合了 Added 和 Fixed（未严格遵循 Semver PATCH/MINOR 分工）。从 v0.4.2 起严格执行：PATCH 版本只含 Fixed，MINOR 版本只含 Added/Changed/Removed。
+
+---
+
 ## [v0.6.0] - 2026-06-21
 
 > **摄入管道阶段二：元数据标注优化** — 三层并行管道替代单步 LLM 分类，实现可复现的标签生成。
@@ -320,16 +343,3 @@
 - ✨ HTML 报告生成 + 去重过滤（SHA256）
 
 ---
-
-## 版本说明
-
-| 标签 | 含义 |
-|------|------|
-| `Added` | 新功能 |
-| `Fixed` | Bug 修复 |
-| `Changed` | 功能变更 |
-| `Deprecated` | 即将移除的功能 |
-| `Removed` | 已移除的功能 |
-| `Security` | 安全问题 |
-
-**历史版本说明**：v0.3.0 及之前版本在同一版本中混合了 Added 和 Fixed（未严格遵循 Semver PATCH/MINOR 分工）。从 v0.4.2 起严格执行：PATCH 版本只含 Fixed，MINOR 版本只含 Added/Changed/Removed。
