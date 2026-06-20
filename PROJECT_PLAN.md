@@ -2,7 +2,7 @@
 
 > 本文档管理 **功能路线图** 和 **设计决策**。版本变更记录见 `CHANGELOG.md`，Bug 跟踪见 `ISSUES.md`。
 
-最后更新: 2026-06-20
+最后更新: 2026-06-20 (v0.6.0 阶段二元数据标注优化)
 
 ---
 
@@ -10,16 +10,17 @@
 
 > 代码已修改、测试已通过，等待用户 L4 验收。
 
-| 版本 | 日期 | 内容 | 验收项 |
-|------|------|------|--------|
-| v0.5.0 | 2026-06-20 | auto_classify 增强 + P2/P3 修复 | L2 管道（文件元数据→UDC 推断）生效；`normalize_facet_values()` 模糊映射生效；6 处 `except:pass` 有日志；`search()` 返回 `content_hash`/`doc_uid` |
-| v0.4.9 | 2026-06-20 | P1 剩余问题修复 | `trust_score` 0-5 刻度统一；Payload Index 含 `needs_review`；`search_by_doc_id()` 返回 `needs_review` |
-| v0.4.8 | 2026-06-19 | 搜索结果展示新字段 | 搜索结果卡片显示 content_type/domain/epistemic_status/temporal_nature/needs_review |
-| v0.4.7 | 2026-06-19 | needs_review 过滤 | 文档管理页面可按 needs_review 状态过滤 |
-| v0.4.6 | 2026-06-19 | AI 分析确认卡片 | 阶段2 AI 分析后显示确认卡片，用户可审核元数据再摄入 |
-| v0.4.5 | 2026-06-18 | P1 问题修复（17项） | 见 CHANGELOG v0.4.5 Fixed 章节 |
-| v0.4.4 | 2026-06-18 | 文档管理页面 + XSS 修复 | `/manage` 页面可列出/查看/删除文档；XSS 漏洞修复 |
-| v0.4.3 | 2026-06-18 | 摄入管线 5 项 PATCH | language 真检测 / overlap 机制 / embed 容错 / source 防护 / images 多格式 |
+| 版本 | 日期 | 内容 | 验收项 | 状态 |
+|------|------|------|--------|:----:|
+| v0.6.0 | 2026-06-20 | 阶段二：元数据标注优化（三层管道） | 来源徽章正确显示；置信度可复现（同输入同输出）；只出现一组下拉菜单；Qdrant payload 含 field_sources + confidence | ⏳ 待验收 |
+| v0.5.0 | 2026-06-20 | auto_classify 增强 + P2/P3 修复 | L2 管道（文件元数据→UDC 推断）生效；`normalize_facet_values()` 模糊映射生效；6 处 `except:pass` 有日志；`search()` 返回 `content_hash`/`doc_uid` | ✅ 已通过 |
+| v0.4.9 | 2026-06-20 | P1 剩余问题修复 | `trust_score` 0-5 刻度统一；Payload Index 含 `needs_review`；`search_by_doc_id()` 返回 `needs_review` | ✅ 已通过 |
+| v0.4.8 | 2026-06-19 | 搜索结果展示新字段 | 搜索结果卡片显示 content_type/domain/epistemic_status/temporal_nature/needs_review | ✅ 已通过 |
+| v0.4.7 | 2026-06-19 | needs_review 过滤 | 文档管理页面可按 needs_review 状态过滤 | ✅ 已通过 |
+| v0.4.6 | 2026-06-19 | AI 分析确认卡片 | 阶段2 AI 分析后显示确认卡片，用户可审核元数据再摄入 | ⚠️ 阶段一通过，但发现 confirm_card 设计错位（I016-I018），归属阶段二修复 |
+| v0.4.5 | 2026-06-18 | P1 问题修复（17项） | 见 CHANGELOG v0.4.5 Fixed 章节 | ✅ 已通过 |
+| v0.4.4 | 2026-06-18 | 文档管理页面 + XSS 修复 | `/manage` 页面可列出/查看/删除文档；XSS 漏洞修复 | ✅ 已通过 |
+| v0.4.3 | 2026-06-18 | 摄入管线 5 项 PATCH | language 真检测 / overlap 机制 / embed 容错 / source 防护 / images 多格式 | ✅ 已通过 |
 
 ---
 
@@ -42,57 +43,80 @@
 | v0.4.7 | ✅ | 框架 | needs_review 过滤 | 文档管理页面添加审核状态过滤器 |
 | v0.4.8 | ✅ | 框架 | 搜索结果展示增强 | 搜索结果卡片显示新字段 |
 | v0.4.9 | ✅ | 框架 | P1 剩余问题修复 | D1+U7/S1/F4 修复 |
-| v0.5.0 | 🚧 | 框架 | auto_classify 增强 + P2/P3 修复 | L2 管道（文件元数据→UDC 推断）+ `normalize_facet_values()` 模糊映射 + `except:pass` 加日志 |
-| v0.6.0 | 🔮 | 框架 | 知识关系网 | NetworkX 图谱 + Plotly 可视化 |
-| v0.7.0 | 🔮 | 墙体 | 检索增强 | QA 自动生成 + 图谱联动检索 |
-| v0.8.0 | 🔮 | 装修 | 管线自动化 | YAML 配置化 + 守望文件夹 |
+| v0.5.0 | ✅ | 框架 | auto_classify 增强 + P2/P3 修复 | L2 管道（文件元数据→UDC 推断）+ `normalize_facet_values()` 模糊映射 + `except:pass` 加日志 |
+| v0.6.0 | ⏳ | 框架 | 阶段二：元数据标注优化 | 三层并行管道（file+rule→LLM兜底→程序置信度）+ 规则引擎 + 来源徽章 + 置信度路由 |
+| v0.7.0 | 🔮 | 框架 | 知识关系网 | NetworkX 图谱 + Plotly 可视化 |
+| v0.8.0 | 🔮 | 墙体 | 检索增强 | QA 自动生成 + 图谱联动检索 |
+| v0.9.0 | 🔮 | 装修 | 管线自动化 | YAML 配置化 + 守望文件夹 |
 | v1.0.0 | 🔮 | 交付 | 生产就绪 | 插件协议 + 桌面端打包 |
 
 ---
 
-## 二、当前版本：v0.5.0 🚧
+## 二、当前版本：v0.6.0 ⏳ 待验收
 
 ### 目标
 
-增强 `auto_classify()` 四层管道（L1-L4），补充 L2 文件元数据推断；修复 P2/P3 代码质量和健壮性问题。
+重构元数据标注管道：从单步 LLM 分类升级为三层并行管道（文件元数据 + 规则引擎并行 → LLM 兜底缺口 → 程序计算置信度），实现可复现的标签生成。
 
-### 技术栈
+### 摄入管道五阶段路线图
 
-| 层 | 技术 |
-|----|------|
-| 向量库 | Qdrant（单集合 `athanor_v1`, 2560d, Cosine, 11 Payload Index） |
-| 嵌入 | Ollama + qwen3-embedding:4b |
-| LLM | DeepSeek API（OpenAI 兼容） |
-| OCR | PaddleOCR / PPStructureV3 |
-| 公式 | KaTeX（服务端渲染） |
-| Web | NiceGUI 3.13（SPA, FastAPI + Vue + Quasar + WebSocket） |
+> 摄入管道按五个阶段递进开发，每个阶段独立验收。
 
-### 已完成的修复（v0.5.0）
+| 阶段 | 名称 | 状态 | 版本 | 核心交付 |
+|:----:|------|:----:|:----:|---------|
+| 一 | 内容准备 | ✅ 完成 | v0.4.0–v0.5.1 | 文件上传 / OCR / 手动输入 + 基础 auto_classify + 入库检索 |
+| 二 | 元数据标注 | ⏳ 待验收 | v0.6.0 | 三层并行管道 + 规则引擎 + 来源徽章 + 置信度路由 |
+| 三 | 摄入执行重构 | 🔮 | — | ingest() 管道化（步骤可配置/可跳过）+ 批量摄入 |
+| 四 | 审核队列 | 🔮 | — | 置信度路由落地（待审/死信队列 UI）+ 知识中枢审核入口 |
+| 五 | 无 UI 管线 | 🔮 | — | 守望文件夹 + 文件夹监控 + 全自动摄入（零人工干预） |
 
-- [x] G2: L2 管道实现（文件元数据→UDC 推断）
-- [x] G1: `normalize_facet_values()` 增强（模糊映射表）
-- [x] C10: 为 6 处 `except:pass` 添加日志记录
-- [x] D4: `_text_hash()` 16-bit → 32-bit（降低碰撞风险）
-- [x] F6+S3: `search()` 返回 `content_hash` 字段
-- [x] S4: `search()` 返回 `doc_uid` 字段
+### v0.6.0 已完成的工作
 
-### 待修复（P2/P3 剩余）
+- [x] T1: 核心数据结构（SOURCE_CONFIDENCE / FIELD_WEIGHTS / SMART_DEFAULTS / AnnotatedField）
+- [x] T2: 规则引擎（CLASSIFY_RULES 40+ 关键词 + 正则 + domain 多选）
+- [x] T3: LLM 重构（temperature→0, call_llm_for_missing 仅补缺口）
+- [x] T4: 合并仲裁（merge_parallel file>rule + fill_defaults）
+- [x] T5: 置信度计算（calculate_confidence 程序计算）
+- [x] T6: classify_document() 主函数（三层管道编排）
+- [x] T7: UI 标注面板重构（来源徽章 + 删除 confirm_card）
+- [x] T8: ingest() 适配（field_sources + overall_confidence 参数）
+- [x] T9: 置信度路由（≥0.75/0.40-0.75/<0.40）
+- [x] T10: 5000 字截断提醒
 
-- [ ] F8: `source_path` 未入库
-- [ ] D5: 图片存绝对路径
-- [ ] E3: XSS 防护复核
-- [ ] C1-C3: `schema.md` 修正
-- [ ] C6-C11: 僵尸文件清理
-- [ ] N1-N5: `.env` 清理
-- [ ] U1: `ingest_ui.py` 僵尸文件
-- [ ] D6-D7: `ext_` 字段 + `facet_filter` 静默忽略
-- [ ] S5: `get_facet_stats()` 全量 scroll
+### v0.6.0 集成测试结果
+
+| # | 测试项 | 结果 |
+|---|--------|:----:|
+| 1 | 纯规则匹配 + 可复现性（同输入同输出） | ✅ |
+| 2 | auto_classify() 兼容包装（旧调用方不受影响） | ✅ |
+| 3 | 文件元数据优先（file > rule > llm > default） | ✅ |
+| 4 | 数学定理文本（evergreen + unverified 信号区分） | ✅ |
+
+### 阶段一验收结果（2026-06-20）
+
+**✅ 核心管道验收通过**：摄入 → auto_classify → normalize → 入库 → 检索 → 分面统计
+
+**⚠️ UI 交互问题 4 项（归属阶段二）**：I016/I016a（按钮双重绑定+重复下拉菜单）、I017（L2 管道未传 metadata）、I018（死代码）→ **已在 v0.6.0 重构中解决**
 
 ---
 
 ## 三、设计决策
 
 > 可追溯的设计决策记录，避免未来重蹈覆辙。
+
+### v0.6.0 决策（2026-06-20 确认）
+
+| 决策点 | 结论 |
+|--------|------|
+| 管道架构 | 三层并行：file + rule 独立并行 → LLM 仅兜底缺口字段 → 程序计算置信度 |
+| LLM 角色 | 兜底而非主力——仅对 file/rule 未覆盖的字段推理，不再生成 confidence |
+| 确定性 | temperature=0，保证同输入永远同输出 |
+| 置信度计算 | 程序计算（Σ 字段权重 × 来源置信度），非 LLM 自报 |
+| 来源优先级 | file(1.0) > user(1.0) > rule(0.85) > llm(0.60) > default(0.0) |
+| 置信度路由 | ≥0.75 直接入库 / 0.40–0.75 待审核 / <0.40 死信队列 |
+| domain 规则 | 多选——收集所有命中值去重，非首次命中即返回 |
+| auto_classify 兼容 | 降级为薄包装调用 classify_document()，旧调用方零改动 |
+| I016-I019 处理 | 不修 Bug，直接替换代码——在重构中自然消失 |
 
 ### v0.5.0 决策（2026-06-20 确认）
 
@@ -123,7 +147,7 @@
 - 守望文件夹触发策略
 - 推送通知层（Server酱/邮件）
 
-### v0.6.0 决策（2026-06-16 确认）
+### v0.7.0 决策（2026-06-16 确认，原 v0.6.0）
 
 | 决策点 | 结论 |
 |--------|------|

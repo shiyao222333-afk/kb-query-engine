@@ -8,6 +8,46 @@
 
 ---
 
+## [v0.6.0] - 2026-06-20
+
+> **摄入管道阶段二：元数据标注优化** — 三层并行管道替代单步 LLM 分类，实现可复现的标签生成。
+
+### Added
+- ✨ 三层并行分类管道 `classify_document()`
+  - **Layer 1（并行推断）**: `extract_file_fields()` 从文件元数据提取 + `match_all_rules()` 规则引擎匹配，两者独立并行
+  - **Layer 2（合并仲裁+兜底）**: `merge_parallel()` 按优先级合并（file > rule）→ `call_llm_for_missing()` 仅对缺口字段调 LLM → `fill_defaults()` 填默认值
+  - **Layer 3（程序计算置信度）**: `calculate_confidence()` 按字段权重 × 来源置信度计算，不依赖 LLM 自报
+- ✨ 规则引擎 `CLASSIFY_RULES`（`config/classifications.py`）
+  - 覆盖 4 个分面字段：content_type / domain / temporal_nature / epistemic_status
+  - 40+ 关键词 + 正则模式（如 `GB/T\s*\d+` 匹配国标编号）
+  - domain 多选特殊处理（收集所有命中值去重）
+- ✨ AnnotatedField 数据结构：每个字段携带 `{value, source, confidence}`
+  - source 取值：file / rule / llm / user / default
+  - 来源置信度：file=1.0, rule=0.85, llm=0.60, user=1.0, default=0.0
+- ✨ 来源徽章 UI：AI 分析后每个字段旁显示来源标记
+  - 📎 file（蓝）/ 📐 rule（绿）/ 🤖 llm（琥珀）/ 👤 user（紫）/ ⚙️ default（灰）
+- ✨ 置信度路由：≥0.75 直接入库 / 0.40–0.75 待审核 / <0.40 死信队列
+- ✨ `ingest()` 新增 `field_sources` + `overall_confidence` 参数，写入 Qdrant payload
+- ✨ 字段权重常量 `FIELD_WEIGHTS`：content_type 0.25 / domain 0.25 / temporal_nature 0.20 / epistemic_status 0.20 / keywords 0.10
+- ✨ 智能默认值 `SMART_DEFAULTS`：缺口字段兜底填充
+- ✨ 手动输入 5000 字截断提醒
+
+### Changed
+- 🔄 `_call_llm_api()` temperature: 0.3 → **0**（确定性输出，保证可复现性）
+- 🔄 `auto_classify()` 降级为薄包装：内部调用 `classify_document()`，旧调用方零改动兼容
+- 🔄 LLM 调用重构：`call_llm_for_missing()` 动态构建 prompt，仅要求生成缺口字段，不再要求 confidence
+- 🔄 UI 重构 `do_ai_analyze()`：调用 `classify_document()`，填充主表单 + 显示来源徽章
+- 🔄 UI 重构 `do_ingest()`：删除死代码合并逻辑，置信度路由改用程序计算值，用户修改字段标记 source="user"
+
+### Resolved (在重构中自然消失，非 Bug 修复)
+- ✅ I016: AI 分析按钮双重 handler 绑定 → `on_ai_analyze` 整个函数删除
+- ✅ I016a: 重复下拉菜单+重复入库按钮 → confirm_card 代码删除
+- ✅ I017: do_ai_analyze 不传 metadata → `classify_document()` 签名含 `file_metadata` 参数
+- ✅ I018: do_ingest 死代码合并逻辑 → 整段重写
+- ✅ I019: AI 分析不可复现 → temperature=0 + 规则引擎扩充 + 程序计算置信度
+
+---
+
 ## [v0.5.1] - 2026-06-20
 
 ### Fixed
