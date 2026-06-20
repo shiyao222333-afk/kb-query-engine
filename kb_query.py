@@ -2055,20 +2055,6 @@ def auto_classify(text: str, metadata: dict = None) -> dict:
                 result["domain"] = domains
                 break
     
-    # L4（LLM 推断）：...
-        "齿轮|模数|强度|公差|机械设计": ["6"],
-        "ai|llm|模型|深度学习|神经网络": ["0"],
-        "标准|国标|iso|gb/t": ["0", "6"],
-        "公式|定理|数学": ["5"],
-        "程序|代码|python|javascript": ["0"],
-        "设计|ux|ui|排版": ["7"],
-    }
-    if "domain" not in result or not result["domain"]:
-        for kw_pattern, domains in keyword_domain_map.items():
-            if any(kw in text_lower for kw in kw_pattern.split("|")):
-                result["domain"] = domains
-                break
-    
     # L4（LLM 推断）：只调用 LLM 推断 result 中缺失的字段
     # 如果 result 已包含所有必要字段，跳过 LLM 调用
     required_fields = ["content_type", "domain", "temporal_nature", "epistemic_status"]
@@ -2932,10 +2918,18 @@ def get_facet_stats(collection: str = DEFAULT_COLLECTION) -> dict:
         meta_stats = {}
 
         # ── 分面分布统计 ──
-        # 分页 scroll 收集所有 points（避免超大集合单次请求过载）
+        # S5 fix: 边 scroll 边聚合，不积累全量 points 到内存
         scroll_limit = 1000
         offset = 0
-        all_points = []
+        ct_count = defaultdict(int)
+        domain_count = defaultdict(int)
+        tn_count = defaultdict(int)
+        ep_count = defaultdict(int)
+        trust_sum = 0
+        trust_n = 0
+        personal_n = 0
+        archived_n = 0
+
         while offset < total_pts:
             try:
                 resp = requests.post(
@@ -2947,47 +2941,37 @@ def get_facet_stats(collection: str = DEFAULT_COLLECTION) -> dict:
                 batch = resp.json()["result"]["points"] if resp.status_code == 200 else []
                 if not batch:
                     break
-                all_points.extend(batch)
+                # 逐批聚合，不保存到内存
+                for p in batch:
+                    pl = p.get("payload", {})
+                    ct = pl.get("content_type", "unknown")
+                    ct_count[ct] += 1
+
+                    for d in pl.get("domain", []):
+                        domain_count[d] += 1
+
+                    tn = pl.get("temporal_nature", "")
+                    if tn:
+                        tn_count[tn] += 1
+
+                    ep = pl.get("epistemic_status", "")
+                    if ep:
+                        ep_count[ep] += 1
+
+                    ts = pl.get("trust_score")
+                    if ts is not None:
+                        trust_sum += ts
+                        trust_n += 1
+
+                    if pl.get("is_personal", False):
+                        personal_n += 1
+
+                    if pl.get("is_archived", False):
+                        archived_n += 1
+
                 offset += len(batch)
             except Exception:
                 break
-
-        # 聚合计数
-        ct_count = defaultdict(int)
-        domain_count = defaultdict(int)
-        tn_count = defaultdict(int)
-        ep_count = defaultdict(int)
-        trust_sum = 0
-        trust_n = 0
-        personal_n = 0
-        archived_n = 0
-
-        for p in all_points:
-            pl = p.get("payload", {})
-            ct = pl.get("content_type", "unknown")
-            ct_count[ct] += 1
-
-            for d in pl.get("domain", []):
-                domain_count[d] += 1
-
-            tn = pl.get("temporal_nature", "")
-            if tn:
-                tn_count[tn] += 1
-
-            ep = pl.get("epistemic_status", "")
-            if ep:
-                ep_count[ep] += 1
-
-            ts = pl.get("trust_score")
-            if ts is not None:
-                trust_sum += ts
-                trust_n += 1
-
-            if pl.get("is_personal", False):
-                personal_n += 1
-
-            if pl.get("is_archived", False):
-                archived_n += 1
 
         facets["content_type"] = dict(ct_count)
         facets["domain"] = dict(domain_count)
