@@ -2058,6 +2058,33 @@ SMART_DEFAULTS = {
 }
 
 
+def detect_language(text: str) -> str:
+    """
+    程序检测文本语言（中/英），不调用 LLM，确定性输出。
+    
+    逻辑：
+        - 统计 CJK 统一汉字范围（\u4e00-\u9fff）字符占比
+        - 占比 > 30% → "zh"
+        - 否则 → "en"（默认英文）
+        - 空文本 → "en"
+    
+    返回:
+        "zh" | "en" | "ja" | "ko"  (远期可扩展)
+    """
+    if not text:
+        return "en"
+    total = len(text)
+    if total == 0:
+        return "en"
+    # CJK 统一汉字
+    cjk_count = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
+    if cjk_count / total > 0.3:
+        return "zh"
+    # 远期：日文（\u3040-\u309f 平假名 + \u30a0-\u30ff 片假名）
+    # 远期：韩文（\uac00-\ud7a3）
+    return "en"
+
+
 def _make_field(value, source: str, conf: float = None) -> dict:
     """创建一个带来源和置信度的字段。"""
     return {
@@ -2331,7 +2358,7 @@ def calculate_confidence(annotated: dict) -> float:
 
 # ── T6: classify_document() 主函数 ──
 
-def classify_document(text: str, file_metadata: dict = None) -> dict:
+def classify_document(text: str, file_metadata: dict = None, project_source: str = "通用") -> dict:
     """
     阶段二标签形成主函数 — 三层管道。
     
@@ -2457,7 +2484,29 @@ def classify_document(text: str, file_metadata: dict = None) -> dict:
             classification[key] = SMART_DEFAULTS.get(key)
     
     classification["confidence"] = {"overall": overall_conf}
-    
+
+    # ── Layer 0: 系统自动填（language / project_source / source）──
+    # 这些字段不参与 file > rule > llm 流程，由系统直接确定
+    lang = detect_language(text)
+    classification["language"] = lang
+
+    classification["project_source"] = project_source
+
+    if file_metadata and file_metadata.get("source"):
+        src = file_metadata["source"]
+    elif file_metadata:
+        # 文件上传但没有显式 source — 用文件名或默认描述
+        src_path = file_metadata.get("source_path", "")
+        src = f"文件: {os.path.basename(src_path)}" if src_path else "文件上传"
+    else:
+        src = "手动输入"
+    classification["source"] = src
+
+    # 将 Layer 0 字段写入 merged（使 annoteted 也包含它们）
+    merged["language"] = _make_field(lang, "system")
+    merged["project_source"] = _make_field(project_source, "system")
+    merged["source"] = _make_field(src, "system")
+
     return {
         "ok": True,
         "classification": classification,
