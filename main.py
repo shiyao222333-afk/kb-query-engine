@@ -168,6 +168,37 @@ EMBED_PRESETS = {
 # ═══════════════════════════════════════════
 
 _DRAWER_BUILT = False  # 防止多页面重复构建抽屉/定时器
+_STATUS_WIDGETS = {}   # 状态栏控件引用（供后台异步任务更新）
+_STATUS_TASK = None    # 后台状态刷新任务
+
+async def _status_loop():
+    """后台异步任务：每10秒刷新系统状态，不绑定任何UI元素，避免页面切换时报错。"""
+    while True:
+        await asyncio.sleep(10)
+        w = _STATUS_WIDGETS
+        if not w:
+            continue
+        try:
+            refresh_system_state()
+            badge = w.get("badge")
+            if badge is None:
+                continue
+            if STATE["qdrant_online"]:
+                badge.set_text("在线")
+                badge.props("color=green")
+                stats = STATE.get("stats", {})
+                pts = w.get("points")
+                if pts:
+                    pts.set_text(f"文档块: {stats.get('points', '--')}")
+                dm = w.get("dim")
+                if dm:
+                    dm.set_text(f"维度: {stats.get('dim', '--')}")
+            else:
+                badge.set_text("离线")
+                badge.props("color=red")
+        except Exception:
+            pass  # 控件临时不可用（抽屉重建中），静默跳过，下次再试
+
 
 def build_left_drawer():
     """构建左侧导航抽屉（所有页面共用）。只构建一次，避免重复创建定时器等元素。"""
@@ -203,25 +234,24 @@ def build_left_drawer():
             dim_label = ui.label("维度: --").classes("text-sm")
 
             def _update_status():
-                try:
-                    refresh_system_state()
-                    if STATE["qdrant_online"]:
-                        status_badge.set_text("在线")
-                        status_badge.props("color=green")
-                        stats = STATE.get("stats", {})
-                        points_label.set_text(f"文档块: {stats.get('points', '--')}")
-                        dim_label.set_text(f"维度: {stats.get('dim', '--')}")
-                    else:
-                        status_badge.set_text("离线")
-                        status_badge.props("color=red")
-                except RuntimeError:
-                    # 父容器已被销毁（页面切换/客户端断开），关闭定时器
-                    _timer.deactivate()
+                refresh_system_state()
+                if STATE["qdrant_online"]:
+                    status_badge.set_text("在线")
+                    status_badge.props("color=green")
+                    stats = STATE.get("stats", {})
+                    points_label.set_text(f"文档块: {stats.get('points', '--')}")
+                    dim_label.set_text(f"维度: {stats.get('dim', '--')}")
+                else:
+                    status_badge.set_text("离线")
+                    status_badge.props("color=red")
 
             ui.button("🔄 刷新", on_click=_update_status).props("flat dense").classes("text-xs")
 
-            # 定时自动刷新状态（每 10 秒）
-            _timer = ui.timer(10.0, _update_status)
+            # 异步后台任务（每10秒刷新状态），取代 ui.timer 避免"parent slot deleted"错误
+            global _STATUS_WIDGETS, _STATUS_TASK
+            _STATUS_WIDGETS.update(badge=status_badge, points=points_label, dim=dim_label)
+            if _STATUS_TASK is None:
+                _STATUS_TASK = asyncio.create_task(_status_loop())
 
         ui.separator()
 
