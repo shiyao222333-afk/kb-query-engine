@@ -167,8 +167,14 @@ EMBED_PRESETS = {
 # 共享 UI 函数
 # ═══════════════════════════════════════════
 
+_DRAWER_BUILT = False  # 防止多页面重复构建抽屉/定时器
+
 def build_left_drawer():
-    """构建左侧导航抽屉（所有页面共用）。"""
+    """构建左侧导航抽屉（所有页面共用）。只构建一次，避免重复创建定时器等元素。"""
+    global _DRAWER_BUILT
+    if _DRAWER_BUILT:
+        return
+    _DRAWER_BUILT = True
     with ui.left_drawer(value=True, fixed=False, bordered=True).classes("bg-gray-900 text-white") as drawer:
         with ui.column().classes("w-full items-center p-4"):
             ui.markdown("## 🏭 Citrinitas")
@@ -197,21 +203,25 @@ def build_left_drawer():
             dim_label = ui.label("维度: --").classes("text-sm")
 
             def _update_status():
-                refresh_system_state()
-                if STATE["qdrant_online"]:
-                    status_badge.set_text("在线")
-                    status_badge.props("color=green")
-                    stats = STATE.get("stats", {})
-                    points_label.set_text(f"文档块: {stats.get('points', '--')}")
-                    dim_label.set_text(f"维度: {stats.get('dim', '--')}")
-                else:
-                    status_badge.set_text("离线")
-                    status_badge.props("color=red")
+                try:
+                    refresh_system_state()
+                    if STATE["qdrant_online"]:
+                        status_badge.set_text("在线")
+                        status_badge.props("color=green")
+                        stats = STATE.get("stats", {})
+                        points_label.set_text(f"文档块: {stats.get('points', '--')}")
+                        dim_label.set_text(f"维度: {stats.get('dim', '--')}")
+                    else:
+                        status_badge.set_text("离线")
+                        status_badge.props("color=red")
+                except RuntimeError:
+                    # 父容器已被销毁（页面切换/客户端断开），关闭定时器
+                    _timer.deactivate()
 
             ui.button("🔄 刷新", on_click=_update_status).props("flat dense").classes("text-xs")
 
             # 定时自动刷新状态（每 10 秒）
-            ui.timer(10.0, _update_status)
+            _timer = ui.timer(10.0, _update_status)
 
         ui.separator()
 
