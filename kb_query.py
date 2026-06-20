@@ -44,9 +44,9 @@ from datetime import datetime, timezone
 import tempfile
 from docx import Document
 from bs4 import BeautifulSoup
-from config.classifications import normalize_facet_values
+from config.classifications import normalize_facet_values, CLASSIFY_RULES
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 try:
     from fpdf import FPDF
@@ -1415,7 +1415,9 @@ def ingest(
     collection: str = DEFAULT_COLLECTION,
     metadata: dict = None,
     model: str = EMBED_MODEL,
-    skip_duplicates: bool = True
+    skip_duplicates: bool = True,
+    field_sources: dict = None,
+    overall_confidence: float = None,
 ) -> dict:
     """
     摄入文档到知识库。
@@ -1427,6 +1429,8 @@ def ingest(
         metadata: 自定义元数据
         model: Ollama 嵌入模型名
         skip_duplicates: 是否跳过重复内容
+        field_sources: 字段来源标记 {"content_type": "rule", ...}（阶段二新增）
+        overall_confidence: 程序计算的整体置信度 0.0-1.0（阶段二新增）
 
     返回:
         {"ok": true/false, "chunks": N, "collection": "...", "source": "..."}
@@ -1583,6 +1587,10 @@ def ingest(
     batch_id     = base_meta.get("batch_id", "")
     needs_review = base_meta.get("needs_review", False)  # 置信度路由标记
 
+    # ── 阶段二新增：字段来源 + 置信度 ──
+    field_sources_payload = field_sources or {}
+    confidence_payload = overall_confidence if overall_confidence is not None else base_meta.get("confidence_overall", None)
+
     points = []
     for i, (chunk, vec) in enumerate(zip(chunks, vectors)):
         # 每个 chunk 用随机 64-bit ID（不依赖 Qdrant points_count，零并发冲突）
@@ -1658,6 +1666,10 @@ def ingest(
                 "batch_id": batch_id,
                 "is_archived": False,
                 "needs_review": needs_review,
+
+                # ── 阶段二新增：字段来源 + 置信度 ──
+                "field_sources": field_sources_payload,
+                "confidence": confidence_payload,
 
                 # ── 预留扩展字段 ──
                 "ext_text1": None, "ext_text2": None, "ext_text3": None,
@@ -1916,7 +1928,7 @@ def _call_llm_api(messages: list, base_url: str = None, api_key: str = None, mod
         json={
             "model": model or LLM_MODEL,
             "messages": messages,
-            "temperature": 0.3,
+            "temperature": 0,
             "max_tokens": 2048
         },
         headers={"Authorization": f"Bearer {api_key or LLM_API_KEY}"},
@@ -1998,143 +2010,252 @@ def _extract_json_block(text: str) -> dict:
             return None
 
 
-def auto_classify(text: str, metadata: dict = None) -> dict:
-    """
-    使用 LLM 自动分析文本，推断分面字段。
-    返回结构化的分类建议 dict，可直接传给 ingest() 的 metadata 参数。
+# ═══════════════════════════════════════════
+# 阶段二：标签形成引擎 — 三层管道
+# Layer 1: 📎文件元数据 + 📐规则引擎 并行推断
+# Layer 2: 合并仲裁 (file > rule > LLM > default) + LLM 兜底缺口
+# Layer 3: 程序计算置信度 (非 LLM 自报)
+# ═══════════════════════════════════════════
 
-    设计原则:
-      - LLM 严格从给定选项中选取，禁止自由发挥
-      - 输出经过字段合法性校验，非法值 fallback 到默认值
-      - 文本过长时取前 5000 字符作为样本（分类不需要全文）
+# ── T1: 核心数据结构常量 ──
 
-    返回:
-      {
-        "ok": true/false,
-        "classification": {content_type, domain[], lifecycle, trust_score,
-                           keywords[], title, author, knowledge_type,
-                           temporal_nature, epistemic_status, udc_code,
-                           auto_summary, is_personal, confidence},
-        "raw_response": "LLM原始输出(调试用)"
-      }
-    """
-    from config.classifications import (
-        CONTENT_TYPES, DOMAINS, LIFECYCLE_STAGES, KNOWLEDGE_TYPES,
-        TEMPORAL_NATURE, EPISTEMIC_STATUS,
-        CONTENT_TYPE_OPTIONS, DOMAIN_OPTIONS, LIFECYCLE_OPTIONS,
-        KNOWLEDGE_TYPE_OPTIONS, TRUST_SCORE_LABELS
-    )
+# 来源置信度：每个来源固有的可信度
+SOURCE_CONFIDENCE = {
+    "file":    1.0,   # 文件自带元数据，最可信
+    "rule":    0.85,  # 规则引擎命中，确定性高
+    "llm":     0.60,  # LLM 推断 (temp=0 确定性，但语义有不确定性)
+    "user":    1.0,   # 用户手动确认
+    "default": 0.0,   # 智能默认值，未经验证
+}
 
-    # ── L1-L3 四层管道（简化版）──
-    # L1（模板默认）：如果 metadata 已提供值，优先使用
-    result = metadata.copy() if metadata else {}
-    
-    # 关键词→domain 映射表（L2/L3 共用）
-    keyword_domain_map = {
-        "齿轮|模数|强度|公差|机械设计": ["6"],
-        "ai|llm|模型|深度学习|神经网络": ["0"],
-        "标准|国标|iso|gb/t": ["0", "6"],
-        "公式|定理|数学": ["5"],
-        "程序|代码|python|javascript": ["0"],
-        "设计|ux|ui|排版": ["7"],
+# 分面字段权重：用于计算整体置信度
+FIELD_WEIGHTS = {
+    "content_type":     0.25,
+    "domain":           0.25,
+    "temporal_nature":  0.20,
+    "epistemic_status": 0.20,
+    "keywords":         0.10,
+}
+
+# 必填分面字段列表
+REQUIRED_FACET_FIELDS = ["content_type", "domain", "temporal_nature", "epistemic_status"]
+
+# 智能默认值
+SMART_DEFAULTS = {
+    "content_type":     "knowledge",
+    "domain":           [],
+    "temporal_nature":  "timeboxed",
+    "epistemic_status": "unverified",
+    "lifecycle":        "published",
+    "trust_score":      3,
+    "keywords":         [],
+    "title":            "",
+    "author":           "",
+    "auto_summary":     "",
+    "is_personal":      False,
+    "knowledge_type":   "",
+    "udc_code":         "",
+}
+
+
+def _make_field(value, source: str, conf: float = None) -> dict:
+    """创建一个带来源和置信度的字段。"""
+    return {
+        "value": value,
+        "source": source,
+        "confidence": conf if conf is not None else SOURCE_CONFIDENCE.get(source, 0.0),
     }
+
+
+# ── T2: 规则引擎 ──
+
+def match_rules(text: str, field_name: str) -> tuple:
+    """
+    对指定分面字段做规则匹配。
     
-    # L2（文件元数据）：从 metadata 提取关键词，推断 domain
-    if "domain" not in result or not result["domain"]:
-        # 从 metadata 提取可用来推断 domain 的字段
-        meta_text = " ".join([
-            str(metadata.get("title", "")),
-            str(metadata.get("author", "")),
-            " ".join(metadata.get("keywords", [])),
-            metadata.get("source", ""),
-        ]).lower()
-        # 复用 keyword_domain_map
-        for kw_pattern, domains in keyword_domain_map.items():
-            if any(kw in meta_text for kw in kw_pattern.split("|")):
-                result["domain"] = domains
-                break
+    返回:
+        (value, source) — 命中时 value=规则值, source="rule"
+        (None, None)    — 未命中
     
-    # L3（关键词匹配）：根据文本内容推断 domain
-    if "domain" not in result or not result["domain"]:
-        text_lower = text.lower()
-        for kw_pattern, domains in keyword_domain_map.items():
-            if any(kw in text_lower for kw in kw_pattern.split("|")):
-                result["domain"] = domains
-                break
+    注意: domain 是多选字段，返回的是 list（所有命中值的去重列表）。
+    """
+    rules = CLASSIFY_RULES.get(field_name, [])
+    text_lower = text.lower()
     
-    # L4（LLM 推断）：只调用 LLM 推断 result 中缺失的字段
-    # 如果 result 已包含所有必要字段，跳过 LLM 调用
-    required_fields = ["content_type", "domain", "temporal_nature", "epistemic_status"]
-    missing_fields = [f for f in required_fields if f not in result or not result[f]]
+    # domain 是多选 — 收集所有命中值
+    if field_name == "domain":
+        matched = []
+        for rule in rules:
+            hit = False
+            for kw in rule["keywords"]:
+                if kw.lower() in text_lower:
+                    hit = True
+                    break
+            if not hit:
+                for pattern in rule.get("patterns", []):
+                    if re.search(pattern, text, re.IGNORECASE):
+                        hit = True
+                        break
+            if hit and rule["value"] not in matched:
+                matched.append(rule["value"])
+        if matched:
+            return matched, "rule"
+        return None, None
+    
+    # 其他字段单选 — 返回第一个命中
+    for rule in rules:
+        for kw in rule["keywords"]:
+            if kw.lower() in text_lower:
+                return rule["value"], "rule"
+        for pattern in rule.get("patterns", []):
+            if re.search(pattern, text, re.IGNORECASE):
+                return rule["value"], "rule"
+    return None, None
+
+
+def match_all_rules(text: str) -> dict:
+    """
+    对全部 4 个分面字段做规则匹配，返回带来源标记的字段字典。
+    
+    返回:
+        {
+            "content_type":     AnnotatedField | None,
+            "domain":           AnnotatedField | None,
+            "temporal_nature":  AnnotatedField | None,
+            "epistemic_status": AnnotatedField | None,
+        }
+        未命中的字段值为 None。
+    """
+    result = {}
+    for field in REQUIRED_FACET_FIELDS:
+        value, source = match_rules(text, field)
+        if value is not None:
+            result[field] = _make_field(value, source)
+        else:
+            result[field] = None
+    return result
+
+
+def extract_file_fields(file_metadata: dict) -> dict:
+    """
+    从文件元数据中提取可用字段（📎 file 来源）。
+    
+    文件元数据可能包含: title, author, content_type, keywords, source 等。
+    只提取确实有值的字段。
+    """
+    if not file_metadata:
+        return {}
+    
+    result = {}
+    # title, author — 文件自带的标题和作者
+    if file_metadata.get("title"):
+        result["title"] = _make_field(file_metadata["title"], "file")
+    if file_metadata.get("author"):
+        result["author"] = _make_field(file_metadata["author"], "file")
+    
+    # content_type — 文件元数据可能指定类型
+    if file_metadata.get("content_type"):
+        result["content_type"] = _make_field(file_metadata["content_type"], "file")
+    
+    # keywords — 文件元数据可能包含关键词
+    if file_metadata.get("keywords"):
+        kws = file_metadata["keywords"]
+        if isinstance(kws, str):
+            kws = [k.strip() for k in kws.split(",") if k.strip()]
+        result["keywords"] = _make_field(kws, "file")
+    
+    return result
+
+
+# ── T3: LLM 兜底 — 仅对缺口字段调用 LLM ──
+
+def call_llm_for_missing(text: str, missing_fields: list) -> dict:
+    """
+    调用 LLM 推断指定缺口字段（temperature=0，确定性输出）。
+    LLM 只生成 missing_fields 中列出的字段，不生成 confidence。
+    
+    返回:
+        dict — {"field_name": value, ...} 扁平值字典（不含来源标记）
+        失败返回空 dict
+    """
     if not missing_fields:
-        # 所有必要字段已确定，跳过 LLM
-        normalize_facet_values(result)
-        return {"ok": True, "classification": result}
+        return {}
     
     api_key = os.environ.get("KB_LLM_API_KEY") or LLM_API_KEY
     if not api_key:
-        return {"ok": False, "error": "未配置 LLM API Key，无法自动分类。请在引擎配置页面设置。"}
-
-    # ── 截取样本（分类不需要全文）──
+        return {}
+    
     sample = text[:5000].strip()
     if not sample:
-        return {"ok": False, "error": "文本内容为空"}
-
-    # ── 构建所有选项的可读列表（供 LLM 选择）──
-    ct_list = "\n".join(f"  - {k}: {v}" for k, v in CONTENT_TYPES.items())
-    domain_list = "\n".join(f"  - {k}: {v}" for k, v in DOMAINS.items())
-    lifecycle_list = "\n".join(f"  - {k}: {v}" for k, v in LIFECYCLE_STAGES.items())
-    temporal_list = "\n".join(f"  - {k}: {v}" for k, v in TEMPORAL_NATURE.items())
-    epistemic_list = "\n".join(f"  - {k}: {v}" for k, v in EPISTEMIC_STATUS.items())
-    ktype_list = "\n".join(f"  - {k}: {v}" for k, v in KNOWLEDGE_TYPES.items())
-    trust_labels = "\n".join(f"  {k}: {v}" for k, v in TRUST_SCORE_LABELS.items())
-
-    prompt = f"""你是一个知识分类专家。请分析以下文本内容，从给定选项中选择最合适的分类标签。你必须严格从选项中选择，不得自由发挥。
+        return {}
+    
+    from config.classifications import (
+        CONTENT_TYPES, DOMAINS, TEMPORAL_NATURE, EPISTEMIC_STATUS,
+        KNOWLEDGE_TYPES, TRUST_SCORE_LABELS,
+    )
+    
+    # 动态构建 prompt — 只要求 missing_fields 中的字段
+    field_descriptions = []
+    if "content_type" in missing_fields:
+        ct_list = "\n".join(f"  - {k}: {v}" for k, v in CONTENT_TYPES.items())
+        field_descriptions.append(f'### content_type — 单选：\n{ct_list}')
+    if "domain" in missing_fields:
+        domain_list = "\n".join(f"  - {k}: {v}" for k, v in DOMAINS.items())
+        field_descriptions.append(f'### domain — 可多选 0-3 个，不相关就空数组 []：\n{domain_list}')
+    if "temporal_nature" in missing_fields:
+        temporal_list = "\n".join(f"  - {k}: {v}" for k, v in TEMPORAL_NATURE.items())
+        field_descriptions.append(f'### temporal_nature — 单选：\n{temporal_list}')
+    if "epistemic_status" in missing_fields:
+        epistemic_list = "\n".join(f"  - {k}: {v}" for k, v in EPISTEMIC_STATUS.items())
+        field_descriptions.append(f'### epistemic_status — 单选：\n{epistemic_list}')
+    if "keywords" in missing_fields:
+        field_descriptions.append('### keywords — 3-8 个技术术语或关键概念')
+    if "title" in missing_fields:
+        field_descriptions.append('### title — 简要标题，不超过 50 字')
+    if "author" in missing_fields:
+        field_descriptions.append('### author — 作者/出处，没有则留空 ""')
+    if "auto_summary" in missing_fields:
+        field_descriptions.append('### auto_summary — 一句话摘要，不超过 100 字')
+    if "trust_score" in missing_fields:
+        trust_labels = "\n".join(f"  {k}: {v}" for k, v in TRUST_SCORE_LABELS.items())
+        field_descriptions.append(f'### trust_score — 0-5 整数：\n{trust_labels}')
+    if "knowledge_type" in missing_fields:
+        ktype_list = "\n".join(f"  - {k}: {v}" for k, v in KNOWLEDGE_TYPES.items())
+        field_descriptions.append(f'### knowledge_type — 单选：\n{ktype_list}')
+    if "udc_code" in missing_fields:
+        field_descriptions.append('### udc_code — UDC 细分码，如 "621"，不确定留空 ""')
+    if "is_personal" in missing_fields:
+        field_descriptions.append('### is_personal — true=个人经验/笔记，false=客观内容')
+    if "lifecycle" in missing_fields:
+        field_descriptions.append('### lifecycle — published/draft/review 等')
+    
+    # 构建示例 JSON — 只包含 missing_fields
+    example_fields = {}
+    for f in missing_fields:
+        if f == "domain":
+            example_fields[f] = ["0"]
+        elif f == "keywords":
+            example_fields[f] = ["关键词1", "关键词2"]
+        elif f == "trust_score":
+            example_fields[f] = 3
+        elif f == "is_personal":
+            example_fields[f] = False
+        else:
+            example_fields[f] = "value"
+    example_json = json.dumps(example_fields, ensure_ascii=False)
+    
+    prompt = f"""你是一个知识分类专家。请分析以下文本，只填写以下字段：{", ".join(missing_fields)}
 
 ## 文本内容
 {sample}
 
-## 分类选项
-
-### content_type（内容类型）— 必须单选，从以下选项中选择：
-{ct_list}
-
-### domain（主题域，UDC 国际十进分类法）— 可多选 0-3 个，不相关就空数组 []：
-{domain_list}
-
-### lifecycle（生命周期/工作流阶段）— 单选：
-{lifecycle_list}
-
-### temporal_nature（时效属性）— 单选，判断内容是否会随时间贬值：
-{temporal_list}
-
-### epistemic_status（认知验证状态，FPF L0-L2）— 单选：
-{epistemic_list}
-
-### trust_score（可信度）— 0-5 整数（0=未评级，3=默认，5=最高），评分依据：
-{trust_labels}
-
-### knowledge_type（知识子类型，仅 content_type=knowledge 时填，否则留空 ""）— 单选：
-{ktype_list}
-
-### keywords（关键词）— 3-8 个技术术语或关键概念，从文本内容中提取
-
-### title（标题）— 从文本推断的简要标题，不超过 50 字。如果文本有明确标题则使用它
-
-### author（作者）— 如果有明确出处/作者/标准号则提取，否则留空 ""
-
-### udc_code（UDC 细分码，可选）— 如果有足够信息，输出更精确的 UDC 类号，如 "621.39"、"004.8"、复合码 "621:004.8"。无法确定则留空 ""
-
-### auto_summary（自动摘要）— 用一句话（≤100字）概括本条内容的核心信息
-
-### is_personal（是否个人化）— true 表示个人经验/笔记/主观观点，false 表示客观内容/标准/论文
-
-### confidence（置信度）— 对你给出的每个分类字段的自信程度，0.0 完全不确定 ~ 1.0 非常确定。必须包含 overall 和每个字段的评分。
+## 需要填写的字段
+{chr(10).join(field_descriptions)}
 
 ## 输出格式
-严格输出以下 JSON，不要包含任何额外文字、不要用 ```json 包裹、不要加注释：
-{{"content_type":"standard","domain":["0","6"],"lifecycle":"published","temporal_nature":"evergreen","epistemic_status":"corroborated","trust_score":4,"knowledge_type":"","keywords":["齿轮","模数","强度"],"title":"渐开线圆柱齿轮 模数系列","author":"GB/T 1357-2008","udc_code":"621","auto_summary":"中国国家标准 GB/T 1357-2008，规定渐开线圆柱齿轮的模数系列。","is_personal":false,"confidence":{{"overall":0.92,"fields":{{"content_type":0.95,"domain":0.88,"temporal_nature":0.90,"epistemic_status":0.98,"lifecycle":0.85,"trust_score":0.80,"knowledge_type":0.95,"title":0.97,"author":0.99,"udc_code":0.90}}}}}}"""
-
+严格输出以下 JSON，不要包含任何额外文字、不要用 ```json 包裹：
+{example_json}"""
+    
     try:
         raw = _call_llm_api(
             [{"role": "user", "content": prompt}],
@@ -2143,66 +2264,226 @@ def auto_classify(text: str, metadata: dict = None) -> dict:
             model=os.environ.get("KB_LLM_MODEL") or LLM_MODEL,
         )
     except Exception as e:
-        return {"ok": False, "error": f"LLM 调用失败: {e}"}
-
-    # ── 解析 JSON ──
+        logger.warning(f"call_llm_for_missing failed: {e}")
+        return {}
+    
     result = _extract_json_block(raw)
     if result is None:
-        return {"ok": False, "error": "LLM 返回格式无法解析", "raw_response": raw}
+        return {}
+    
+    # 只取 missing_fields 中的字段
+    return {k: v for k, v in result.items() if k in missing_fields}
 
-    classification = {
-        "content_type": result.get("content_type", "knowledge"),
-        "domain": result.get("domain", []),
-        "lifecycle": result.get("lifecycle", "published"),
-        "temporal_nature": result.get("temporal_nature", "timeboxed"),
-        "epistemic_status": result.get("epistemic_status", "unverified"),
-        "trust_score": max(0, min(5, result.get("trust_score", 3))),
-        "knowledge_type": result.get("knowledge_type", ""),
-        "keywords": result.get("keywords", []),
-        "title": result.get("title", ""),
-        "author": result.get("author", ""),
-        "udc_code": result.get("udc_code", ""),
-        "auto_summary": result.get("auto_summary", ""),
-        "is_personal": result.get("is_personal", False),
-        "confidence": result.get("confidence", None),
-    }
 
-    # ── 枚举守卫：规范化分面字段值 ──
-    normalize_facet_values(classification)
+# ── T4: 合并仲裁 ──
 
-    if not isinstance(classification["keywords"], list):
-        classification["keywords"] = []
-    classification["keywords"] = [str(k).strip()[:50] for k in classification["keywords"] if k]
+def merge_parallel(file_fields: dict, rule_fields: dict) -> dict:
+    """
+    合并文件源和规则源的结果（并行产出，file 优先）。
+    
+    对每个字段：
+        - 两源都有值 → file 优先 (file > rule)
+        - 只有一源有值 → 用该源
+        - 两源都没值 → 该字段为 None（等 LLM 兜底或 default）
+    
+    返回带来源标记的字段字典，未覆盖的字段值为 None。
+    """
+    all_keys = set(REQUIRED_FACET_FIELDS) | set(file_fields.keys()) | set(rule_fields.keys())
+    merged = {}
+    for key in all_keys:
+        file_val = file_fields.get(key)
+        rule_val = rule_fields.get(key)
+        if file_val is not None:
+            merged[key] = file_val
+        elif rule_val is not None:
+            merged[key] = rule_val
+        else:
+            merged[key] = None
+    return merged
 
-    # 校验 title/author（确保是 str）
-    classification["title"] = str(classification["title"]).strip()[:100]
-    classification["author"] = str(classification["author"]).strip()[:100]
 
-    # 校验 auto_summary（确保是 str，截断到 200 字）
-    classification["auto_summary"] = str(classification.get("auto_summary", "")).strip()[:200]
+def fill_defaults(annotated: dict) -> dict:
+    """
+    对仍为 None 的字段填入智能默认值 (⚙️ default)。
+    """
+    for key, default_val in SMART_DEFAULTS.items():
+        if annotated.get(key) is None or (isinstance(annotated.get(key), dict) and annotated[key].get("value") is None):
+            annotated[key] = _make_field(default_val, "default")
+    return annotated
 
-    # 校验 is_personal（确保是 bool）
-    ip_val = classification.get("is_personal", False)
-    if isinstance(ip_val, str):
-        classification["is_personal"] = ip_val.strip().lower() in ("true", "yes", "1")
-    else:
-        classification["is_personal"] = bool(ip_val)
 
-    # 校验 confidence（标准化结构，缺失则回退到默认值）
-    conf = classification.get("confidence")
-    if isinstance(conf, dict) and isinstance(conf.get("overall"), (int, float)):
-        classification["confidence"] = {
-            "overall": max(0.0, min(1.0, float(conf["overall"]))),
-            "fields": conf.get("fields", {}),
+# ── T5: 置信度计算 ──
+
+def calculate_confidence(annotated: dict) -> float:
+    """
+    程序计算整体置信度：Σ(字段权重 × 字段来源置信度)。
+    
+    非分面字段（title/author/auto_summary 等）不参与计算，
+    但影响是否调用 LLM（有值就不调用）。
+    """
+    total = 0.0
+    for field, weight in FIELD_WEIGHTS.items():
+        field_data = annotated.get(field)
+        if field_data and isinstance(field_data, dict):
+            total += weight * field_data.get("confidence", 0.0)
+    return round(total, 2)
+
+
+# ── T6: classify_document() 主函数 ──
+
+def classify_document(text: str, file_metadata: dict = None) -> dict:
+    """
+    阶段二标签形成主函数 — 三层管道。
+    
+    Layer 1: 📎文件元数据 + 📐规则引擎 并行推断（互不依赖）
+    Layer 2: 合并仲裁 (file > rule) → 识别缺口 → 🤖LLM 兜底 (temp=0, 仅缺口) → ⚙️default 填剩余
+    Layer 3: 程序计算置信度
+    
+    返回:
+        {
+            "ok": true/false,
+            "classification": {  # 扁平值字典（兼容旧接口）
+                "content_type", "domain", "temporal_nature", "epistemic_status",
+                "keywords", "title", "author", "auto_summary", "trust_score",
+                "knowledge_type", "udc_code", "is_personal", "lifecycle",
+                "confidence": {"overall": float},
+            },
+            "annotated": {  # 带来源标记的完整结构（新接口）
+                "content_type": AnnotatedField, ...
+                "field_sources": {"content_type": "rule", ...},
+                "overall_confidence": float,
+            },
+            "raw_response": "LLM原始输出(调试用, 可能为空)",
         }
-    else:
-        # LLM 未返回置信度 → 默认整体 0.5，字段不标记
-        classification["confidence"] = {"overall": 0.5, "fields": {}}
-
+    """
+    # ── Layer 1: 两个源并行跑，互不依赖 ──
+    file_fields = extract_file_fields(file_metadata)
+    rule_fields = match_all_rules(text)
+    
+    # ── Layer 2: 合并 + 识别缺口 ──
+    merged = merge_parallel(file_fields, rule_fields)
+    
+    # 识别仍为 None 或空值的分面字段 + 可选字段
+    missing_facets = []
+    for f in REQUIRED_FACET_FIELDS:
+        field_data = merged.get(f)
+        if field_data is None or (isinstance(field_data, dict) and not field_data.get("value")):
+            missing_facets.append(f)
+    
+    # 可选字段也尝试让 LLM 补充
+    optional_for_llm = ["keywords", "title", "author", "auto_summary", "trust_score",
+                        "knowledge_type", "udc_code", "is_personal", "lifecycle"]
+    missing_optional = [f for f in optional_for_llm if merged.get(f) is None]
+    
+    all_missing = missing_facets + missing_optional
+    
+    # LLM 只在有缺口时才调用，且只生成缺口字段
+    raw_response = ""
+    if all_missing:
+        llm_result = call_llm_for_missing(text, all_missing)
+        raw_response = str(llm_result) if llm_result else ""
+        
+        # 将 LLM 结果填入 merged（标记来源为 llm）
+        for field, value in llm_result.items():
+            if value is not None and value != "":
+                merged[field] = _make_field(value, "llm")
+    
+    # 填充默认值
+    fill_defaults(merged)
+    
+    # ── normalize 分面字段 ──
+    # 提取扁平值做 normalize，再写回
+    flat_for_normalize = {}
+    for f in REQUIRED_FACET_FIELDS:
+        fd = merged.get(f)
+        if fd and isinstance(fd, dict):
+            flat_for_normalize[f] = fd.get("value")
+    normalize_facet_values(flat_for_normalize)
+    # 写回
+    for f in REQUIRED_FACET_FIELDS:
+        if merged.get(f) and isinstance(merged[f], dict):
+            merged[f]["value"] = flat_for_normalize.get(f, merged[f]["value"])
+    
+    # 校验 keywords 是 list
+    kw_field = merged.get("keywords")
+    if kw_field and isinstance(kw_field, dict):
+        kw_val = kw_field.get("value", [])
+        if not isinstance(kw_val, list):
+            kw_val = [str(kw_val)] if kw_val else []
+        kw_val = [str(k).strip()[:50] for k in kw_val if k]
+        kw_field["value"] = kw_val
+    
+    # 校验 title/author/auto_summary 是 str
+    for str_field in ["title", "author", "auto_summary"]:
+        fd = merged.get(str_field)
+        if fd and isinstance(fd, dict):
+            fd["value"] = str(fd.get("value", "")).strip()[:200 if str_field == "auto_summary" else 100]
+    
+    # 校验 is_personal 是 bool
+    ip_fd = merged.get("is_personal")
+    if ip_fd and isinstance(ip_fd, dict):
+        ip_val = ip_fd.get("value", False)
+        if isinstance(ip_val, str):
+            ip_fd["value"] = ip_val.strip().lower() in ("true", "yes", "1")
+        else:
+            ip_fd["value"] = bool(ip_val)
+    
+    # 校验 trust_score 是 0-5 int
+    ts_fd = merged.get("trust_score")
+    if ts_fd and isinstance(ts_fd, dict):
+        try:
+            ts_fd["value"] = max(0, min(5, int(ts_fd.get("value", 3))))
+        except (ValueError, TypeError):
+            ts_fd["value"] = 3
+    
+    # ── Layer 3: 程序计算置信度 ──
+    overall_conf = calculate_confidence(merged)
+    
+    # 构建 field_sources 字典
+    field_sources = {}
+    for key, fd in merged.items():
+        if fd and isinstance(fd, dict):
+            field_sources[key] = fd.get("source", "default")
+    
+    # 构建扁平 classification（兼容旧接口）
+    classification = {}
+    for key in REQUIRED_FACET_FIELDS + ["keywords", "title", "author", "auto_summary",
+                                         "trust_score", "knowledge_type", "udc_code",
+                                         "is_personal", "lifecycle"]:
+        fd = merged.get(key)
+        if fd and isinstance(fd, dict):
+            classification[key] = fd.get("value")
+        else:
+            classification[key] = SMART_DEFAULTS.get(key)
+    
+    classification["confidence"] = {"overall": overall_conf}
+    
     return {
         "ok": True,
         "classification": classification,
-        "raw_response": raw,
+        "annotated": {
+            **merged,
+            "field_sources": field_sources,
+            "overall_confidence": overall_conf,
+        },
+        "raw_response": raw_response,
+    }
+
+
+def auto_classify(text: str, metadata: dict = None) -> dict:
+    """
+    兼容包装：调用 classify_document() 并返回与旧接口兼容的结构。
+    
+    阶段二已将标签形成逻辑重构为 classify_document() 三层管道。
+    此函数保留以兼容现有调用方（main.py 等），内部转发到新实现。
+    """
+    result = classify_document(text, file_metadata=metadata)
+    # 旧接口不返回 "annotated" 键，只返回 classification + raw_response
+    return {
+        "ok": result.get("ok", False),
+        "classification": result.get("classification", {}),
+        "annotated": result.get("annotated", {}),
+        "raw_response": result.get("raw_response", ""),
     }
 
 

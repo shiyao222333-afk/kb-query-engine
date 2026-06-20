@@ -483,6 +483,56 @@ LICENSE_TYPES = {
 
 
 # ═══════════════════════════════════════════
+# T2: 规则引擎 — CLASSIFY_RULES
+# 覆盖 4 个分面字段，关键词 + 正则双路径匹配
+# 命中即定值，100% 可复现，不依赖 LLM
+# ═══════════════════════════════════════════
+CLASSIFY_RULES = {
+    # ── content_type ──
+    "content_type": [
+        {"value": "standard", "keywords": ["国标", "标准", "规范", "GB", "ISO", "IEC", "ASTM", "DIN", "JIS"],
+         "patterns": [r"GB/T\s*\d+", r"ISO\s*\d+", r"IEC\s*\d+"]},
+        {"value": "paper", "keywords": ["摘要", "参考文献", "arXiv", "引言", "结论", "abstract", "references"],
+         "patterns": [r"doi:\s*10\.", r"arXiv:\s*\d+"]},
+        {"value": "book", "keywords": ["前言", "序言", "后记", "目录", "第版"],
+         "patterns": [r"第[一二三四五六七八九十\d]+章"]},
+        {"value": "video_script", "keywords": ["视频", "B站", "弹幕", "UP主", "点赞", "投币", "收藏", "剪辑"]},
+        {"value": "social_post", "keywords": ["小红书", "公众号", "微博", "抖音", "种草", "安利"]},
+        {"value": "personal_note", "keywords": ["日记", "心得", "笔记", "感想", "今天", "复盘"]},
+        {"value": "legal_doc", "keywords": ["合同", "协议", "甲方", "乙方", "条款", "专利号"]},
+        {"value": "template", "keywords": ["模板", "模板格式", "填空"]},
+    ],
+    # ── domain (UDC 9 主类) ──
+    "domain": [
+        {"value": "0", "keywords": ["ai", "llm", "算法", "编程", "python", "数据", "知识管理", "标准", "计算机", "人工智能", "深度学习", "神经网络", "数据库", "软件"]},
+        {"value": "1", "keywords": ["哲学", "认知", "心理", "冥想", "成长", "自我", "意识", "思维"]},
+        {"value": "2", "keywords": ["宗教", "神学", "信仰", "佛", "道", "圣经"]},
+        {"value": "3", "keywords": ["法律", "经济", "管理", "教育", "合同", "财务", "投资", "营销", "团队"]},
+        {"value": "5", "keywords": ["数学", "物理", "化学", "生物", "定理", "公式", "量子", "分子", "实验"]},
+        {"value": "6", "keywords": ["齿轮", "模数", "机械", "电机", "轴承", "建筑", "医疗", "通信", "电气", "传动", "强度", "公差", "材料", "制造", "工程", "电路", "传感器"]},
+        {"value": "7", "keywords": ["设计", "影视", "音乐", "排版", "配色", "构图", "摄影", "动画", "美术"]},
+        {"value": "8", "keywords": ["写作", "语法", "翻译", "出版", "修辞", "小说", "散文", "诗词"]},
+        {"value": "9", "keywords": ["历史", "传记", "地理", "考古", "年表", "年代", "战争史"]},
+    ],
+    # ── temporal_nature ──
+    "temporal_nature": [
+        {"value": "evergreen", "keywords": ["公式", "定理", "原理", "定律", "定义", "公理", "基础理论"],
+         "patterns": [r"[A-Za-z]\s*=\s*[\d]", r"σ\s*=", r"F\s*=\s*m"]},
+        {"value": "transient", "keywords": ["新闻", "发布", "趋势", "动态", "最新", "2024", "2025", "2026"],
+         "patterns": [r"\d{4}年\d{1,2}月"]},
+        {"value": "timeboxed", "keywords": ["版本", "规范", "指南", "best practice", "最佳实践"]},
+    ],
+    # ── epistemic_status ──
+    "epistemic_status": [
+        {"value": "corroborated", "keywords": ["国标", "标准", "ISO", "论文", "实验", "数据", "研究", "GB/T", "doi"],
+         "patterns": [r"GB/T\s*\d+", r"ISO\s*\d+", r"doi:\s*10\."]},
+        {"value": "unverified", "keywords": ["我认为", "我觉得", "猜测", "可能", "也许", "大概", "猜测", "个人认为"]},
+        {"value": "substantiated", "keywords": ["推导", "证明", "逻辑", "因此", "综上所述", "由此可得"]},
+    ],
+}
+
+
+# ═══════════════════════════════════════════
 # 兼容层：保留旧接口
 # ═══════════════════════════════════════════
 CLASSIFICATION_SCHEMES = {

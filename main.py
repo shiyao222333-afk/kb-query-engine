@@ -448,6 +448,9 @@ def page_ingest():
                     STATE["ingest_source"] = "手动输入"
                     STATE["ingest_method"] = "manual"
                     STATE["source_path"] = ""  # 手动输入，无源文件
+                    # T10: 5000 字截断提醒
+                    if len(txt) > 5000:
+                        ui.notify(f"⚠️ 内容超过 5000 字（{len(txt)} 字），AI 分析将仅使用前 5000 字", type="warning")
 
                 ui.button("📥 确认内容", on_click=on_manual_save).props("color=blue")
 
@@ -457,116 +460,13 @@ def page_ingest():
         ui.markdown("## 阶段二：AI 分析与元数据")
         ui.markdown("*AI 自动推断分类和标签，请确认后摄入。*")
 
-        # 确认卡片（初始隐藏）
-        confirm_card = ui.card().classes("w-full").set_visibility(False)
-        confirm_result = {"ok": False, "metadata": {}}
-
         ai_cols = ui.row().classes("w-full gap-4")
         with ai_cols:
             ai_btn = ui.button("🤖 AI 分析", color="teal")
             ai_status = ui.label("等待分析...").classes("text-sm text-gray-500")
 
-        async def on_ai_analyze():
-            """AI 分析回调：调用 auto_classify，展示确认卡片"""
-            nonlocal ingest_content, ingest_method, ingest_source
-            if not ingest_content.strip():
-                ui.notify("⚠️ 没有内容可分析", type="negative")
-                return
-            ai_status.text = "AI 分析中..."
-            ai_btn.disable()
-
-            try:
-                # 准备元数据（传入文件元数据，让 AI 参考）
-                meta_for_ai = STATE.get("auto_metadata", {}) or {}
-                result = await asyncio.to_thread(
-                    kb_query.auto_classify,
-                    text=ingest_content[:3000],
-                    metadata=meta_for_ai if isinstance(meta_for_ai, dict) else None,
-                )
-                if not result.get("ok"):
-                    ui.notify(f"AI 分析失败: {result.get('error', '')}", type="negative")
-                    return
-
-                cls = result.get("classification", {})
-                conf = cls.get("confidence", {})
-                overall = conf.get("overall", 0.5) if isinstance(conf, dict) else 0.5
-
-                # 存储到 STATE
-                STATE["classify_result"] = result
-
-                # 展示确认卡片
-                with confirm_card:
-                    confirm_card.clear()
-                    with ui.column().classes("w-full gap-3"):
-                        ui.markdown(f"### ✅ AI 分析完成（置信度 {overall:.0%}）")
-
-                        # 文件元数据（如果有）
-                        auto_meta = STATE.get("auto_metadata", {}) or {}
-                        if auto_meta:
-                            ui.markdown("**📎 文件元数据（已自动提取）**")
-                            with ui.grid(columns=2).classes("w-full gap-2"):
-                                for k, v in auto_meta.items():
-                                    if v:
-                                        ui.label(f"{k}:").classes("font-bold")
-                                        ui.label(str(v)).classes("text-sm")
-
-                        # AI 分析结果
-                        ui.markdown("**🤖 AI 分析结果（请确认/修改）**")
-                        with ui.grid(columns=2).classes("w-full gap-2"):
-                            ai_content_type = ui.select(
-                                options=[o[0] for o in classifications.CONTENT_TYPE_OPTIONS],
-                                label="内容类型",
-                                value=cls.get("content_type", "knowledge"),
-                            ).classes("w-full")
-                            ai_domain = ui.select(
-                                options=[o[0] for o in classifications.DOMAIN_OPTIONS],
-                                label="领域",
-                                multiple=True,
-                                value=cls.get("domain", []),
-                            ).classes("w-full").props("use-chips")
-                            ai_temporal = ui.select(
-                                options=[o[0] for o in classifications.TEMPORAL_NATURE_OPTIONS],
-                                label="时效属性",
-                                value=cls.get("temporal_nature", "timeboxed"),
-                            ).classes("w-full")
-                            ai_epistemic = ui.select(
-                                options=[o[0] for o in classifications.EPISTEMIC_STATUS_OPTIONS],
-                                label="认知验证",
-                                value=cls.get("epistemic_status", "unverified"),
-                            ).classes("w-full")
-
-                        # 确认/取消按钮
-                        with ui.row().classes("w-full gap-2 mt-4"):
-                            def on_confirm():
-                                confirm_card.set_visibility(False)
-                                # 收集 AI 表单的值
-                                confirmed_meta = {
-                                    "content_type": ai_content_type.value,
-                                    "domain": list(ai_domain.value) if ai_domain.value else [],
-                                    "temporal_nature": ai_temporal.value,
-                                    "epistemic_status": ai_epistemic.value,
-                                }
-                                STATE["classify_result"] = {"ok": True, "classification": confirmed_meta}
-                                ui.notify("✅ 元数据已确认，可点击「摄入」", type="positive")
-                                ai_status.text = f"✅ 已确认（置信度 {overall:.0%}）"
-
-                            def on_cancel():
-                                confirm_card.set_visibility(False)
-                                STATE.pop("classify_result", None)
-                                ui.notify("已取消 AI 分析", type="info")
-
-                            ui.button("✅ 确认并入库", on_click=on_confirm, color="green")
-                            ui.button("取消", on_click=on_cancel, color="grey")
-
-                confirm_card.set_visibility(True)
-                ai_status.text = f"✅ 分析完成（置信度 {overall:.0%}），请确认元数据"
-
-            except Exception as ex:
-                ui.notify(f"AI 分析出错: {ex}", type="negative")
-            finally:
-                ai_btn.enable()
-
-        ai_btn.on_click(on_ai_analyze)
+        # 来源标记显示区（AI 分析后显示字段来源）
+        source_badge_area = ui.column().classes("w-full")
 
         # 四核心分面表单（简化版）
         with ui.row().classes("w-full gap-4 mt-4"):
@@ -638,11 +538,9 @@ def page_ingest():
                 ui.notify("⚠️ 没有内容可摄入", type="negative")
                 return
 
-            # ── 域字段可选了（AI 会自动填，不再强制用户手动选）──
             domain_val = domain.value or []
 
             try:
-                # 元数据来源：根据摄入方式标记
                 _meta_source_map = {"upload": "file", "ocr": "ocr", "manual": "manual"}
                 metadata = {
                     "content_type": content_type.value,
@@ -659,30 +557,36 @@ def page_ingest():
                     "metadata_source": _meta_source_map.get(ingest_method, "manual"),
                 }
 
-                # ── 合并 AI 分类结果（全量字段）──
-                cls_result = STATE.get("classify_result", {}).get("classification", {})
-                if cls_result:
-                    # 只填充用户未手动设置的字段（避免覆盖 UI 手动选择）
-                    metadata.update({k: v for k, v in cls_result.items() if k not in metadata})
-
-                # ── 置信度路由 ──
+                # ── 阶段二：程序置信度路由（替代 LLM 自报）──
                 classify_result = STATE.get("classify_result", {})
-                confidence = classify_result.get("classification", {}).get("confidence", {})
-                overall_conf = confidence.get("overall", 0.5) if isinstance(confidence, dict) else 0.5
+                annotated = classify_result.get("annotated", {})
+                overall_conf = annotated.get("overall_confidence", 0.0)
 
-                if overall_conf >= 0.8:
+                # 用户修改了下拉菜单 → 字段来源标记为 user（置信度 1.0）
+                field_sources = dict(annotated.get("field_sources", {}))
+                if classify_result.get("ok"):
+                    cls = classify_result.get("classification", {})
+                    # 对比当前 UI 值与 AI 分析结果，标记用户修改的字段
+                    if content_type.value != cls.get("content_type"):
+                        field_sources["content_type"] = "user"
+                    if list(domain_val) != cls.get("domain", []):
+                        field_sources["domain"] = "user"
+                    if temporal_nature.value != cls.get("temporal_nature"):
+                        field_sources["temporal_nature"] = "user"
+                    if epistemic_status.value != cls.get("epistemic_status"):
+                        field_sources["epistemic_status"] = "user"
+
+                if overall_conf >= 0.75:
                     needs_review = False
                     dlq = False
-                elif overall_conf >= 0.5:
+                elif overall_conf >= 0.40:
                     needs_review = True
                     dlq = False
                 else:
-                    # 置信度过低 → 死信队列
                     needs_review = False
                     dlq = True
 
                 if dlq:
-                    # 写入 Dead Letter Queue
                     import json, time as _time
                     dlq_dir = os.path.join(PROJECT_DIR, "local_data", "dead_letter")
                     os.makedirs(dlq_dir, exist_ok=True)
@@ -690,14 +594,15 @@ def page_ingest():
                     dlq_data = {
                         "content": ingest_content[:3000],
                         "metadata": metadata,
-                        "confidence": confidence,
-                        "reason": f"置信度过低（{overall_conf:.2f} < 0.5），需人工审核",
+                        "confidence": overall_conf,
+                        "field_sources": field_sources,
+                        "reason": f"置信度过低（{overall_conf:.2f} < 0.40），需人工审核",
                         "ingested_at": datetime.now(timezone.utc).isoformat(),
                     }
                     with open(dlq_file, "w", encoding="utf-8") as f:
                         json.dump(dlq_data, f, ensure_ascii=False, indent=2)
                     ui.notify(
-                        f"✋ 置信度过低（{overall_conf:.1%}），已放入死信队列待审核",
+                        f"✋ 置信度过低（{overall_conf:.0%}），已放入死信队列待审核",
                         type="warning",
                     )
                     return
@@ -710,9 +615,11 @@ def page_ingest():
                     text=ingest_content,
                     metadata=metadata,
                     collection=STATE["active_collection"],
+                    field_sources=field_sources,
+                    overall_confidence=overall_conf,
                 )
                 if result.get("ok"):
-                    ui.notify(f"✅ 摄入成功！({result.get('chunks', '?')} 块)", type="positive")
+                    ui.notify(f"✅ 摄入成功！({result.get('chunks', '?')} 块, 置信度 {overall_conf:.0%})", type="positive")
                     # 重置
                     ingest_content = ""
                     content_text.set_value("")
@@ -724,6 +631,8 @@ def page_ingest():
                     lifecycle.set_value("published")
                     project_source.set_value("")
                     STATE["source_path"] = ""
+                    STATE.pop("classify_result", None)
+                    source_badge_area.clear()
                     refresh_system_state()
                 else:
                     ui.notify(f"❌ 摄入失败: {result.get('error', '?')}", type="negative")
@@ -732,25 +641,32 @@ def page_ingest():
 
         ui.button("🚀 摄入到知识库", on_click=do_ingest).props("color=green size=lg").classes("w-full mt-2")
 
-        # AI 分析回调
+        # ── AI 分析回调（阶段二：调用 classify_document 三层管道）──
         async def do_ai_analyze():
             nonlocal ingest_content
             if not ingest_content.strip():
                 ui.notify("⚠️ 请先输入内容", type="warning")
                 return
 
-            llm_configured = bool(os.environ.get("KB_LLM_API_KEY"))
-            if not llm_configured:
-                ui.notify("⚠️ 未配置 LLM（请在引擎配置中设置 API Key）", type="warning")
-                return
-
             ai_status.set_text("正在分析...")
+            ai_btn.disable()
             try:
-                result = await asyncio.to_thread(kb_query.auto_classify, ingest_content)
+                # 传入文件元数据（让规则引擎和文件源使用）
+                meta_for_ai = STATE.get("auto_metadata", {}) or {}
+                result = await asyncio.to_thread(
+                    kb_query.classify_document,
+                    ingest_content,
+                    meta_for_ai if isinstance(meta_for_ai, dict) else None,
+                )
                 if result and result.get("ok"):
-                    cls = result.get("classification", result)
+                    cls = result.get("classification", {})
+                    annotated = result.get("annotated", {})
                     STATE["classify_result"] = result
-                    ai_status.set_text("✅ 分析完成！")
+                    overall = annotated.get("overall_confidence", 0.0)
+                    sources = annotated.get("field_sources", {})
+
+                    ai_status.set_text(f"✅ 分析完成（置信度 {overall:.0%}）")
+
                     # 自动填充表单
                     ct_val = cls.get("content_type", "knowledge")
                     if ct_val in ct_options:
@@ -776,12 +692,38 @@ def page_ingest():
                     kw = cls.get("keywords", [])
                     if kw:
                         keywords.set_value(", ".join(kw if isinstance(kw, list) else [str(kw)]))
+
+                    # 显示来源徽章
+                    source_badge_area.clear()
+                    with source_badge_area:
+                        source_labels = {
+                            "file": "📎 文件", "rule": "📐 规则", "llm": "🤖 AI",
+                            "user": "👤 用户", "default": "⚙️ 默认",
+                        }
+                        source_colors = {
+                            "file": "blue", "rule": "green", "llm": "amber",
+                            "user": "purple", "default": "grey",
+                        }
+                        facet_labels = {
+                            "content_type": "内容类型", "domain": "主题域",
+                            "temporal_nature": "时效属性", "epistemic_status": "认知验证",
+                        }
+                        with ui.row().classes("w-full gap-2 flex-wrap"):
+                            for field in ["content_type", "domain", "temporal_nature", "epistemic_status"]:
+                                src = sources.get(field, "default")
+                                label = source_labels.get(src, src)
+                                color = source_colors.get(src, "grey")
+                                facet_name = facet_labels.get(field, field)
+                                ui.badge(f"{facet_name}: {label}", color=color)
+
                     ui.notify("AI 分析结果已自动填入，可直接摄入", type="positive")
                 else:
                     ai_status.set_text("⚠️ 分析返回为空，将使用默认值摄入")
             except Exception as ex:
                 ai_status.set_text(f"❌ 分析失败: {ex}")
                 ui.notify(f"AI 分析失败: {ex}", type="negative")
+            finally:
+                ai_btn.enable()
 
         ai_btn.on_click(do_ai_analyze)
 
