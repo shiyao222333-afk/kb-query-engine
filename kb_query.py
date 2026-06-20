@@ -1765,6 +1765,11 @@ def search(
     # 构建过滤条件（分面过滤）
     qdrant_filter = None
     if facet_filter:
+        # D7 fix: validate facet_filter keys
+        _VALID_FILTER_KEYS = {"content_type","domain","knowledge_type","tags","temporal_nature","epistemic_status","lifecycle","is_personal","trust_score_min"}
+        _invalid_keys = set(facet_filter.keys()) - _VALID_FILTER_KEYS
+        if _invalid_keys:
+            logger.warning(f"facet_filter invalid keys (ignored): {_invalid_keys}")
         must_conditions = []
 
         def _add_match(key, vals):
