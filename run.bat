@@ -1,60 +1,77 @@
 @echo off
-REM Citrinitas 启动脚本 — 自动杀掉旧进程再启动
-chcp 65001 >nul
+REM ============================================================
+REM  Citrinitas · 熔知 - One-Click Launcher
+REM ============================================================
 
-set PROJECT_DIR=%~dp0
-set PYTHON=%PROJECT_DIR%venv\Scripts\python.exe
-set PID_FILE=%PROJECT_DIR%.citrinitas.pid
+set "PROJECT_DIR=%~dp0"
+cd /d "%PROJECT_DIR%"
 
-echo ========================================
-echo   Citrinitas · 熔知 启动脚本
-echo ========================================
+echo =========================================
+echo   Citrinitas · 熔知
+echo =========================================
+echo.
 
-REM 0. 检查 venv Python 是否存在
-if not exist "%PYTHON%" (
-    echo [ERROR] 找不到 venv Python: %PYTHON%
-    echo         请先运行: python -m venv venv ^&^& venv\Scripts\pip install -r requirements.txt
+REM --- Step 1: Clean up stale processes ---
+echo [1/4] Cleaning up stale processes...
+for /f "tokens=5" %%a in ('netstat -ano 2^>NUL ^| findstr "127.0.0.1:8080" ^| findstr "LISTENING"') do (
+    echo   Killing old process on port 8080 [PID %%a]
+    taskkill /PID %%a /F 2>NUL
+    timeout /t 2 /nobreak > nul
+)
+echo   OK
+
+REM --- Step 2: Check Python venv ---
+echo.
+echo [2/4] Python environment...
+if not exist "venv\Scripts\python.exe" (
+    echo   [ERROR] venv\Scripts\python.exe not found
+    echo   Please run: python -m venv venv
+    echo   Then: venv\Scripts\pip install -r requirements.txt
     pause
     exit /b 1
 )
+echo   OK
 
-REM 1. 通过 PID 文件杀掉旧进程
-if exist "%PID_FILE%" (
-    set /p OLD_PID=<"%PID_FILE%"
-    echo [1/4] 杀掉旧进程 (PID: %OLD_PID%) ...
-    taskkill /F /PID %OLD_PID% >nul 2>&1
-    del /q "%PID_FILE%" >nul 2>&1
-    timeout /t 1 >nul
-) else (
-    echo [1/4] 无 PID 文件，跳过 ...
-)
-
-REM 2. 杀掉占用 8080 端口的进程
-echo [2/4] 检查端口 8080 ...
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":8080 " ^| findstr "LISTENING"') do (
-    echo       杀掉占用端口的进程 (PID: %%a) ...
-    taskkill /F /PID %%a >nul 2>&1
-)
-timeout /t 1 >nul
-
-REM 3. 杀掉所有运行 main.py 的 python 进程
-echo [3/4] 清理残留的 python main.py 进程 ...
-for /f "tokens=2" %%a in ('tasklist ^| findstr "python.exe"') do (
-    wmic process where "ProcessId=%%a" get CommandLine 2>nul | findstr /i "main.py" >nul 2>&1
-    if not errorlevel 1 (
-        echo       杀掉 PID: %%a
-        taskkill /F /PID %%a >nul 2>&1
+REM --- Step 3: Auto-start Qdrant ---
+echo.
+echo [3/4] Qdrant...
+tasklist /FI "IMAGENAME eq qdrant.exe" 2>NUL | find /I "qdrant.exe" >NUL
+if %ERRORLEVEL% NEQ 0 (
+    if exist "D:\qdrant\qdrant.exe" (
+        start "Qdrant" /MIN D:\qdrant\qdrant.exe --config-path "D:\qdrant\config\config.yaml"
+        echo   Qdrant started (port 6333)
+        timeout /t 3 /nobreak > nul
+    ) else (
+        echo   [!] Qdrant not found - vector search disabled
     )
+) else (
+    echo   Qdrant already running
 )
-timeout /t 1 >nul
 
-REM 4. 启动服务（挂起方式，不关闭窗口）
-echo [4/4] 启动 Citrinitas ...
-echo       工作目录: %PROJECT_DIR%
-echo       访问地址: <ADDRESS_REDACTED>
-echo       venv Python: %PYTHON%
-echo ========================================
+REM --- Step 4: Start Web UI ---
+echo.
+echo [4/4] Starting Web UI...
+echo.
+echo   URL: http://localhost:8080
+echo   Press Ctrl+C to stop, or close this window.
 echo.
 
-cd /d "%PROJECT_DIR%"
-"%PYTHON%" main.py
+venv\Scripts\python.exe main.py
+set EXIT_CODE=%errorlevel%
+
+echo.
+echo   Web UI stopped.
+
+REM --- Cleanup: Stop Qdrant ---
+echo.
+echo Stopping Qdrant...
+taskkill /FI "IMAGENAME eq qdrant.exe" /F 2>NUL
+if %ERRORLEVEL% EQU 0 (
+    echo   Qdrant stopped.
+) else (
+    echo   Qdrant already stopped or not running.
+)
+
+echo.
+echo [process exited, code=%EXIT_CODE%]
+pause
