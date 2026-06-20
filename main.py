@@ -168,36 +168,33 @@ EMBED_PRESETS = {
 # ═══════════════════════════════════════════
 
 _DRAWER_BUILT = False  # 防止多页面重复构建抽屉/定时器
-_STATUS_WIDGETS = {}   # 状态栏控件引用（供后台异步任务更新）
-_STATUS_TASK = None    # 后台状态刷新任务
+_STATUS_WIDGETS = {}   # 状态栏控件引用（供 app.timer 回调更新）
 
-async def _status_loop():
-    """后台异步任务：每10秒刷新系统状态，不绑定任何UI元素，避免页面切换时报错。"""
-    while True:
-        await asyncio.sleep(10)
-        w = _STATUS_WIDGETS
-        if not w:
-            continue
-        try:
-            refresh_system_state()
-            badge = w.get("badge")
-            if badge is None:
-                continue
-            if STATE["qdrant_online"]:
-                badge.set_text("在线")
-                badge.props("color=green")
-                stats = STATE.get("stats", {})
-                pts = w.get("points")
-                if pts:
-                    pts.set_text(f"文档块: {stats.get('points', '--')}")
-                dm = w.get("dim")
-                if dm:
-                    dm.set_text(f"维度: {stats.get('dim', '--')}")
-            else:
-                badge.set_text("离线")
-                badge.props("color=red")
-        except Exception:
-            pass  # 控件临时不可用（抽屉重建中），静默跳过，下次再试
+def _status_tick():
+    """全局状态刷新回调（由 app.timer 每10秒触发，独立于任何UI元素）。"""
+    w = _STATUS_WIDGETS
+    if not w:
+        return
+    try:
+        refresh_system_state()
+        badge = w.get("badge")
+        if badge is None:
+            return
+        if STATE["qdrant_online"]:
+            badge.set_text("在线")
+            badge.props("color=green")
+            stats = STATE.get("stats", {})
+            pts = w.get("points")
+            if pts:
+                pts.set_text(f"文档块: {stats.get('points', '--')}")
+            dm = w.get("dim")
+            if dm:
+                dm.set_text(f"维度: {stats.get('dim', '--')}")
+        else:
+            badge.set_text("离线")
+            badge.props("color=red")
+    except Exception:
+        pass  # 控件临时不可用（抽屉重建中），静默跳过
 
 
 def build_left_drawer():
@@ -247,11 +244,10 @@ def build_left_drawer():
 
             ui.button("🔄 刷新", on_click=_update_status).props("flat dense").classes("text-xs")
 
-            # 异步后台任务（每10秒刷新状态），取代 ui.timer 避免"parent slot deleted"错误
-            global _STATUS_WIDGETS, _STATUS_TASK
+            # 全局定时器（app.timer 独立于UI，页面切换不会报 parent slot deleted）
+            global _STATUS_WIDGETS
             _STATUS_WIDGETS.update(badge=status_badge, points=points_label, dim=dim_label)
-            if _STATUS_TASK is None:
-                _STATUS_TASK = asyncio.create_task(_status_loop())
+            app.timer(10.0, _status_tick)
 
         ui.separator()
 
