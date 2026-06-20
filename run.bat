@@ -3,12 +3,20 @@ REM Citrinitas 启动脚本 — 自动杀掉旧进程再启动
 chcp 65001 >nul
 
 set PROJECT_DIR=%~dp0
-set PYTHON=C:\Python314\python.exe
+set PYTHON=%PROJECT_DIR%venv\Scripts\python.exe
 set PID_FILE=%PROJECT_DIR%.citrinitas.pid
 
 echo ========================================
 echo   Citrinitas · 熔知 启动脚本
 echo ========================================
+
+REM 0. 检查 venv Python 是否存在
+if not exist "%PYTHON%" (
+    echo [ERROR] 找不到 venv Python: %PYTHON%
+    echo         请先运行: python -m venv venv ^&^& venv\Scripts\pip install -r requirements.txt
+    pause
+    exit /b 1
+)
 
 REM 1. 通过 PID 文件杀掉旧进程
 if exist "%PID_FILE%" (
@@ -40,12 +48,13 @@ for /f "tokens=2" %%a in ('tasklist ^| findstr "python.exe"') do (
 )
 timeout /t 1 >nul
 
-REM 4. 启动服务
+REM 4. 启动服务（挂起方式，不关闭窗口）
 echo [4/4] 启动 Citrinitas ...
 echo       工作目录: %PROJECT_DIR%
 echo       访问地址: <ADDRESS_REDACTED>
+echo       venv Python: %PYTHON%
 echo ========================================
 echo.
 
 cd /d "%PROJECT_DIR%"
-start "Citrinitas" "%PYTHON%" main.py
+"%PYTHON%" main.py

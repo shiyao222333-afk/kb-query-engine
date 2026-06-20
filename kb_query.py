@@ -1533,11 +1533,18 @@ def ingest(
     ingested_at = datetime.now(timezone.utc).isoformat()
     full_text_hash = _text_hash(text)
 
-    # ── 分面字段 ──
-    content_type   = base_meta.get("content_type", "knowledge")
-    domain         = base_meta.get("domain", [])
-    temporal_nature = base_meta.get("temporal_nature", "timeboxed")
-    epistemic_status = base_meta.get("epistemic_status", "unverified")
+    # ── 分面字段（调用 normalize_facet_values 做枚举守卫）──
+    facet_raw = {
+        "content_type":    base_meta.get("content_type", "knowledge"),
+        "domain":          base_meta.get("domain", []),
+        "temporal_nature": base_meta.get("temporal_nature", "timeboxed"),
+        "epistemic_status": base_meta.get("epistemic_status", "unverified"),
+    }
+    facet_norm = normalize_facet_values(facet_raw)
+    content_type    = facet_norm["content_type"]
+    domain          = facet_norm["domain"] if isinstance(facet_norm["domain"], list) else [facet_norm["domain"]]
+    temporal_nature = facet_norm["temporal_nature"]
+    epistemic_status = facet_norm["epistemic_status"]
 
     # ── 生命周期（普通字段）──
     lifecycle      = base_meta.get("lifecycle", "published")
