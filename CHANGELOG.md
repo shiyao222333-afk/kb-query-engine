@@ -38,6 +38,22 @@
 - 🔄 LLM 调用重构：`call_llm_for_missing()` 动态构建 prompt，仅要求生成缺口字段，不再要求 confidence
 - 🔄 UI 重构 `do_ai_analyze()`：调用 `classify_document()`，填充主表单 + 显示来源徽章
 - 🔄 UI 重构 `do_ingest()`：删除死代码合并逻辑，置信度路由改用程序计算值，用户修改字段标记 source="user"
+- 🔄 **结果面板 UI 重构（T2~T7）**
+  - 下拉菜单全部替换为**卡片式结果面板**（`panel_funcs.py`）
+  - 19 个字段按 5 组展示：分面分类(4) / 内容标识(4) / 知识属性(6) / 来源信息(3) / 时间戳(2)
+  - 高级选项折叠显示（`ui.expansion`），减少初始屏占用
+  - 点击字段卡片弹出编辑对话框（按 `widget` 类型自适应：下拉/多选/输入/开关/滑块/日期）
+  - 编辑后面板自动刷新，来源徽章更新为 👤 user
+  - 面板顶部显示整体置信度进度条 + 来源统计
+  - `FIELD_DISPLAY_CFG` 配置驱动渲染，新增 `field_cfg.py`
+  - `do_ingest()` 改为读取 `PANEL_VALUES` 全局字典，不再依赖 UI 组件 `.value`
+  - Layer 0 自动填充分离：`detect_language()` + `project_source` 系统自动填入，不占用 LLM 推断额度
+
+### Fixed
+- 🐛 `main.py` `do_ingest()` 引用已删除的 UI 变量（`domain`/`content_type` 等）→ 重写为读取 `PANEL_VALUES`
+- 🐛 `panel_funcs.py` 卡片无点击效果 → 添加 `on("click")` 事件绑定
+- 🐛 编辑后面板不刷新 → 编辑确认后调用 `_refresh_panels()`
+- 🐛 来源徽章显示文字过长 → 改为纯图标 + 颜色编码
 
 ### Resolved (在重构中自然消失，非 Bug 修复)
 - ✅ I016: AI 分析按钮双重 handler 绑定 → `on_ai_analyze` 整个函数删除

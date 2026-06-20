@@ -30,6 +30,7 @@ sys.path.insert(0, PROJECT_DIR)
 import kb_query
 from config import classifications
 from field_cfg import FIELD_DISPLAY_CFG, SOURCE_ICON, PANEL_VALUES
+from panel_funcs import build_result_panel, build_advanced_panel, edit_field_dialog
 from utils.file_handler import (
     detect_file_type, extract_text, extract_auto_metadata, detect_encoding,
     SIZE_LIMIT_MB, FORMAT_DISPLAY_NAMES,
@@ -500,66 +501,9 @@ def page_ingest():
             ai_btn = ui.button("🤖 AI 分析", color="teal")
             ai_status = ui.label("等待分析...").classes("text-sm text-gray-500")
 
-        # 来源标记显示区（AI 分析后显示字段来源）
-        source_badge_area = ui.column().classes("w-full")
-
-        # 四核心分面表单（简化版）
-        with ui.row().classes("w-full gap-4 mt-4"):
-            with ui.column().classes("flex-1"):
-                ct_options = [o[0] for o in classifications.CONTENT_TYPE_OPTIONS]
-                ct_display = {o[0]: o[1] for o in classifications.CONTENT_TYPE_OPTIONS}
-                content_type = ui.select(
-                    label="内容类型 *",
-                    options=ct_options,
-                    value="knowledge",
-                ).classes("w-full")
-
-            with ui.column().classes("flex-1"):
-                dm_options = [o[0] for o in classifications.DOMAIN_OPTIONS]
-                dm_display = {o[0]: o[1] for o in classifications.DOMAIN_OPTIONS}
-                domain = ui.select(
-                    label="主题域 *",
-                    options=dm_options,
-                    multiple=True,
-                ).classes("w-full").props("use-chips")
-
-        with ui.row().classes("w-full gap-4 mt-2"):
-            with ui.column().classes("flex-1"):
-                tn_options = [o[0] for o in classifications.TEMPORAL_NATURE_OPTIONS]
-                temporal_nature = ui.select(
-                    label="时效属性 *",
-                    options=tn_options,
-                    value="timeboxed",
-                ).classes("w-full")
-
-            with ui.column().classes("flex-1"):
-                ep_options = [o[0] for o in classifications.EPISTEMIC_STATUS_OPTIONS]
-                epistemic_status = ui.select(
-                    label="认知验证 *",
-                    options=ep_options,
-                    value="unverified",
-                ).classes("w-full")
-
-        with ui.row().classes("w-full gap-4 mt-2"):
-            with ui.column().classes("flex-1"):
-                lc_options = [o[0] for o in classifications.LIFECYCLE_OPTIONS]
-                lifecycle = ui.select(
-                    label="工作流阶段",
-                    options=lc_options,
-                    value="published",
-                ).classes("w-full")
-
-            with ui.column().classes("flex-1"):
-                project_source = ui.input(
-                    label="关联项目",
-                    value="",
-                    placeholder="如：智能台灯Pro",
-                ).classes("w-full")
-
-        # 置信度 + 关键词
-        with ui.row().classes("w-full gap-4 mt-2"):
-            trust_score = ui.number(label="可信度 (0-5)", value=3, min=0, max=5, step=1).classes("w-1/3")
-            keywords = ui.input(label="关键词（逗号分隔）", placeholder="如: 机器学习, 神经网络, 深度学习").classes("w-2/3")
+        # 结果面板区（AI 分析后渲染卡片式面板）
+        result_container = ui.column().classes("w-full")
+        advanced_container = ui.column().classes("w-full")
 
         ui.separator()
 
@@ -573,78 +517,73 @@ def page_ingest():
                 ui.notify("⚠️ 没有内容可摄入", type="negative")
                 return
 
-            domain_val = domain.value or []
+            # 从 PANEL_VALUES 读取当前值（用户可能已编辑）
+            metadata = dict(PANEL_VALUES)
 
-            try:
-                _meta_source_map = {"upload": "file", "ocr": "ocr", "manual": "manual"}
-                metadata = {
-                    "content_type": content_type.value,
-                    "domain": list(domain_val) if isinstance(domain_val, (list, tuple)) else [],
-                    "temporal_nature": temporal_nature.value,
-                    "epistemic_status": epistemic_status.value,
-                    "lifecycle": lifecycle.value,
-                    "project_source": (project_source.value or "").strip(),
-                    "trust_score": trust_score.value,
-                    "keywords": [k.strip() for k in (keywords.value or "").split(",") if k.strip()],
-                    "source": ingest_source,
-                    "source_path": STATE.get("source_path", ""),
-                    "ingest_method": ingest_method or "manual",
-                    "metadata_source": _meta_source_map.get(ingest_method, "manual"),
-                }
+            # 补充系统字段
+            metadata["source_path"] = STATE.get("source_path", "")
+            metadata["ingest_method"] = ingest_method or "manual"
+            _meta_source_map = {"upload": "file", "ocr": "ocr", "manual": "manual"}
+            metadata["metadata_source"] = _meta_source_map.get(ingest_method, "manual")
 
-                # ── 阶段二：程序置信度路由（替代 LLM 自报）──
-                classify_result = STATE.get("classify_result", {})
+            # 获取 AI 分析结果
+            classify_result = STATE.get("classify_result")
+            if classify_result and classify_result.get("ok"):
                 annotated = classify_result.get("annotated", {})
+                classification = classify_result.get("classification", {})
+                field_sources = dict(annotated.get("field_sources", {}))
                 overall_conf = annotated.get("overall_confidence", 0.0)
 
-                # 用户修改了下拉菜单 → 字段来源标记为 user（置信度 1.0）
-                field_sources = dict(annotated.get("field_sources", {}))
-                if classify_result.get("ok"):
-                    cls = classify_result.get("classification", {})
-                    # 对比当前 UI 值与 AI 分析结果，标记用户修改的字段
-                    if content_type.value != cls.get("content_type"):
-                        field_sources["content_type"] = "user"
-                    if list(domain_val) != cls.get("domain", []):
-                        field_sources["domain"] = "user"
-                    if temporal_nature.value != cls.get("temporal_nature"):
-                        field_sources["temporal_nature"] = "user"
-                    if epistemic_status.value != cls.get("epistemic_status"):
-                        field_sources["epistemic_status"] = "user"
+                # 检测用户修改：对比 PANEL_VALUES 与原始 classification
+                for field in FIELD_DISPLAY_CFG:
+                    panel_val = PANEL_VALUES.get(field)
+                    orig_val = classification.get(field)
+                    if isinstance(orig_val, list) and isinstance(panel_val, list):
+                        if set(orig_val) != set(panel_val):
+                            field_sources[field] = "user"
+                    elif panel_val != orig_val:
+                        field_sources[field] = "user"
+            else:
+                field_sources = {f: "user" for f in FIELD_DISPLAY_CFG}
+                overall_conf = 0.0
+                ui.notify("⚠️ 未执行 AI 分析，将使用当前值直接摄入", type="warning")
 
-                if overall_conf >= 0.75:
-                    needs_review = False
-                    dlq = False
-                elif overall_conf >= 0.40:
-                    needs_review = True
-                    dlq = False
-                else:
-                    needs_review = False
-                    dlq = True
+            # DLQ 检查
+            if overall_conf >= 0.75:
+                needs_review = False
+                dlq = False
+            elif overall_conf >= 0.40:
+                needs_review = True
+                dlq = False
+            else:
+                needs_review = False
+                dlq = True
 
-                if dlq:
-                    import json, time as _time
-                    dlq_dir = os.path.join(PROJECT_DIR, "local_data", "dead_letter")
-                    os.makedirs(dlq_dir, exist_ok=True)
-                    dlq_file = os.path.join(dlq_dir, f"{int(_time.time())}.json")
-                    dlq_data = {
-                        "content": ingest_content[:3000],
-                        "metadata": metadata,
-                        "confidence": overall_conf,
-                        "field_sources": field_sources,
-                        "reason": f"置信度过低（{overall_conf:.2f} < 0.40），需人工审核",
-                        "ingested_at": datetime.now(timezone.utc).isoformat(),
-                    }
-                    with open(dlq_file, "w", encoding="utf-8") as f:
-                        json.dump(dlq_data, f, ensure_ascii=False, indent=2)
-                    ui.notify(
-                        f"✋ 置信度过低（{overall_conf:.0%}），已放入死信队列待审核",
-                        type="warning",
-                    )
-                    return
+            if dlq:
+                import json, time as _time
+                dlq_dir = os.path.join(PROJECT_DIR, "local_data", "dead_letter")
+                os.makedirs(dlq_dir, exist_ok=True)
+                dlq_file = os.path.join(dlq_dir, f"{int(_time.time())}.json")
+                dlq_data = {
+                    "content": ingest_content[:3000],
+                    "metadata": metadata,
+                    "confidence": overall_conf,
+                    "field_sources": field_sources,
+                    "reason": f"置信度过低（{overall_conf:.2f} < 0.40），需人工审核",
+                    "ingested_at": datetime.now(timezone.utc).isoformat(),
+                }
+                with open(dlq_file, "w", encoding="utf-8") as f:
+                    json.dump(dlq_data, f, ensure_ascii=False, indent=2)
+                ui.notify(
+                    f"✋ 置信度过低（{overall_conf:.0%}），已放入死信队列待审核",
+                    type="warning",
+                )
+                return
 
-                if needs_review:
-                    metadata["needs_review"] = True
+            if needs_review:
+                metadata["needs_review"] = True
 
+            try:
                 result = await asyncio.to_thread(
                     kb_query.ingest,
                     text=ingest_content,
@@ -655,19 +594,15 @@ def page_ingest():
                 )
                 if result.get("ok"):
                     ui.notify(f"✅ 摄入成功！({result.get('chunks', '?')} 块, 置信度 {overall_conf:.0%})", type="positive")
-                    # 重置
+                    # 重置表单
                     ingest_content = ""
                     content_text.set_value("")
                     source_label.set_text("来源：--")
-                    content_type.set_value("knowledge")
-                    domain.set_value([])
-                    temporal_nature.set_value("timeboxed")
-                    epistemic_status.set_value("unverified")
-                    lifecycle.set_value("published")
-                    project_source.set_value("")
                     STATE["source_path"] = ""
                     STATE.pop("classify_result", None)
-                    source_badge_area.clear()
+                    PANEL_VALUES.clear()
+                    result_container.clear()
+                    advanced_container.clear()
                     refresh_system_state()
                 else:
                     ui.notify(f"❌ 摄入失败: {result.get('error', '?')}", type="negative")
@@ -686,12 +621,13 @@ def page_ingest():
             ai_status.set_text("正在分析...")
             ai_btn.disable()
             try:
-                # 传入文件元数据（让规则引擎和文件源使用）
-                meta_for_ai = STATE.get("auto_metadata", {}) or {}
+                # 传入文件元数据 + 当前项目（让 Layer 0 填 project_source）
+                _proj = STATE.get("current_project", "通用")
                 result = await asyncio.to_thread(
                     kb_query.classify_document,
                     ingest_content,
                     meta_for_ai if isinstance(meta_for_ai, dict) else None,
+                    _proj,
                 )
                 if result and result.get("ok"):
                     cls = result.get("classification", {})
@@ -700,58 +636,18 @@ def page_ingest():
                     overall = annotated.get("overall_confidence", 0.0)
                     sources = annotated.get("field_sources", {})
 
+                    # 填充 PANEL_VALUES（全局缓存，供面板和摄入使用）
+                    global PANEL_VALUES
+                    PANEL_VALUES.clear()
+                    for field in FIELD_DISPLAY_CFG:
+                        PANEL_VALUES[field] = cls.get(field)
+
+                    # 渲染卡片式结果面板
+                    build_result_panel(annotated, cls, result_container)
+                    build_advanced_panel(annotated, cls, advanced_container)
+
                     ai_status.set_text(f"✅ 分析完成（置信度 {overall:.0%}）")
-
-                    # 自动填充表单
-                    ct_val = cls.get("content_type", "knowledge")
-                    if ct_val in ct_options:
-                        content_type.set_value(ct_val)
-                    dm_val = cls.get("domain", [])
-                    if dm_val:
-                        if isinstance(dm_val, str):
-                            dm_val = [dm_val]
-                        valid_dm = [d for d in dm_val if d in dm_options]
-                        if valid_dm:
-                            domain.set_value(valid_dm)
-                    tn_val = cls.get("temporal_nature", "timeboxed")
-                    if tn_val in tn_options:
-                        temporal_nature.set_value(tn_val)
-                    ep_val = cls.get("epistemic_status", "unverified")
-                    if ep_val in ep_options:
-                        epistemic_status.set_value(ep_val)
-                    lc_val = cls.get("lifecycle", "published")
-                    if lc_val in lc_options:
-                        lifecycle.set_value(lc_val)
-                    ts = cls.get("trust_score", 3)
-                    trust_score.set_value(max(0, min(5, int(ts) if ts else 3)))
-                    kw = cls.get("keywords", [])
-                    if kw:
-                        keywords.set_value(", ".join(kw if isinstance(kw, list) else [str(kw)]))
-
-                    # 显示来源徽章
-                    source_badge_area.clear()
-                    with source_badge_area:
-                        source_labels = {
-                            "file": "📎 文件", "rule": "📐 规则", "llm": "🤖 AI",
-                            "user": "👤 用户", "default": "⚙️ 默认",
-                        }
-                        source_colors = {
-                            "file": "blue", "rule": "green", "llm": "amber",
-                            "user": "purple", "default": "grey",
-                        }
-                        facet_labels = {
-                            "content_type": "内容类型", "domain": "主题域",
-                            "temporal_nature": "时效属性", "epistemic_status": "认知验证",
-                        }
-                        with ui.row().classes("w-full gap-2 flex-wrap"):
-                            for field in ["content_type", "domain", "temporal_nature", "epistemic_status"]:
-                                src = sources.get(field, "default")
-                                label = source_labels.get(src, src)
-                                color = source_colors.get(src, "grey")
-                                facet_name = facet_labels.get(field, field)
-                                ui.badge(f"{facet_name}: {label}", color=color)
-
-                    ui.notify("AI 分析结果已自动填入，可直接摄入", type="positive")
+                    ui.notify("AI 分析结果已渲染为卡片面板，可直接修改", type="positive")
                 else:
                     ai_status.set_text("⚠️ 分析返回为空，将使用默认值摄入")
             except Exception as ex:
