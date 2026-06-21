@@ -141,7 +141,7 @@ def page_search():
                             render_chunk_card(c, i+1)
                     STATE["last_search"] = result
 
-                refresh_system_state()
+                await asyncio.to_thread(refresh_system_state)
             except Exception as ex:
                 with results_area:
                     results_area.clear()
