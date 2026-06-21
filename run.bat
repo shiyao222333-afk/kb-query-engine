@@ -52,7 +52,7 @@ REM --- Step 4: Start Web UI ---
 echo.
 echo [4/4] Starting Web UI...
 echo.
-echo   URL: http://localhost:8080
+echo   URL: http://127.0.0.1:8080
 echo   Press Ctrl+C to stop, or close this window.
 echo.
 
