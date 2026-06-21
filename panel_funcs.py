@@ -151,6 +151,72 @@ def build_advanced_panel(annotated: dict, classification: dict, container):
             _render_group("时间戳", ["timeline.published", "timeline.effective"], exp)
 
 
+def _build_edit_widget(cfg: dict, current):
+    """
+    根据字段配置构建对应的编辑控件。
+    
+    返回:
+        edit_widget (ui.element) — 或 None（label 类型不可编辑）
+    """
+    widget_type = cfg.get("widget", "input")
+
+    if widget_type == "select":
+        opts = cfg.get("options", [])
+        return ui.select(
+            label=cfg.get("zh"),
+            options=[o[0] for o in opts],
+            value=current,
+        ).classes("w-full")
+
+    elif widget_type == "multiselect":
+        opts = cfg.get("options", [])
+        return ui.select(
+            label=cfg.get("zh"),
+            options=[o[0] for o in opts],
+            value=current,
+            multiple=True,
+        ).classes("w-full").props("use-chips")
+
+    elif widget_type == "input":
+        return ui.input(
+            label=cfg.get("zh"),
+            value=current or "",
+        ).classes("w-full")
+
+    elif widget_type == "input_chips":
+        current_str = ", ".join(current) if isinstance(current, list) else (current or "")
+        return ui.input(
+            label=cfg.get("zh"),
+            placeholder="逗号分隔",
+            value=current_str,
+        ).classes("w-full")
+
+    elif widget_type == "switch":
+        return ui.switch(
+            label=cfg.get("zh"),
+            value=bool(current),
+        )
+
+    elif widget_type == "slider":
+        return ui.slider(
+            min=0, max=5,
+            value=current or 3,
+            step=1,
+        ).classes("w-full")
+
+    elif widget_type == "date":
+        return ui.date(
+            value=current or "",
+        ).classes("w-full")
+
+    elif widget_type in ("label", "label_multiline"):
+        ui.label("此字段由系统自动生成，不可编辑").classes("text-sm text-gray-500")
+        return None
+
+    # fallback: input
+    return ui.input(label=cfg.get("zh"), value=current or "").classes("w-full")
+
+
 def edit_field_dialog(field_name: str):
     """
     弹出编辑对话框，修改指定字段的值。
@@ -166,60 +232,7 @@ def edit_field_dialog(field_name: str):
 
     with ui.dialog() as dialog, ui.card().classes("p-4 w-96"):
         ui.label(f"编辑：{cfg.get('zh', field_name)}").classes("text-lg font-bold mb-4")
-        edit_widget = None
-
-        if widget_type == "select":
-            opts = cfg.get("options", [])
-            edit_widget = ui.select(
-                label=cfg.get("zh"),
-                options=[o[0] for o in opts],
-                value=current,
-            ).classes("w-full")
-
-        elif widget_type == "multiselect":
-            opts = cfg.get("options", [])
-            edit_widget = ui.select(
-                label=cfg.get("zh"),
-                options=[o[0] for o in opts],
-                value=current,
-                multiple=True,
-            ).classes("w-full").props("use-chips")
-
-        elif widget_type == "input":
-            edit_widget = ui.input(
-                label=cfg.get("zh"),
-                value=current or "",
-            ).classes("w-full")
-
-        elif widget_type == "input_chips":
-            current_str = ", ".join(current) if isinstance(current, list) else (current or "")
-            edit_widget = ui.input(
-                label=cfg.get("zh"),
-                placeholder="逗号分隔",
-                value=current_str,
-            ).classes("w-full")
-
-        elif widget_type == "switch":
-            edit_widget = ui.switch(
-                label=cfg.get("zh"),
-                value=bool(current),
-            )
-
-        elif widget_type == "slider":
-            edit_widget = ui.slider(
-                min=0, max=5,
-                value=current or 3,
-                step=1,
-            ).classes("w-full")
-
-        elif widget_type == "date":
-            edit_widget = ui.date(
-                value=current or "",
-            ).classes("w-full")
-
-        elif widget_type in ("label", "label_multiline"):
-            ui.label("此字段由系统自动生成，不可编辑").classes("text-sm text-gray-500")
-            edit_widget = None
+        edit_widget = _build_edit_widget(cfg, current)
 
         if edit_widget is not None:
             ui.separator()

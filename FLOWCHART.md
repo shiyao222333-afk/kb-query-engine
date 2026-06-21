@@ -99,7 +99,7 @@ flowchart TB
 | N6 | ③ AI分类 | 纯文本 | 分面标签+置信度 | LLM 按分面体系打分 | v0.4.0 |
 | C4 | 置信度路由 | 标签+置信度 | 高→入库, 低→审核 | 阈值可配置 | v0.4.5 |
 | N8 | ④ 审核队列 | 低置信度结果 | 确认后的标签 | 等待人工确认 | v0.4.5 |
-| N7 | ⑤ 存储 | 文本+标签+元数据 | 向量索引+文档注册 | metadata_source + source_path 写入 | v0.4.0, 1f, 1i |
+| N7 | ⑤ 存储 | 文本+标签+元数据 | 向量索引+文档注册 | metadata_source + source_path 写入<br/>含预存储钩子（Nigredo 接口），详见 [pre_store_hook_spec.md](docs/pre_store_hook_spec.md) | v0.4.0, v0.7.0(B4) |
 
 ### 摄入连线
 

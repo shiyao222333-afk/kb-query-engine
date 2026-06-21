@@ -84,9 +84,231 @@ from classify_pipeline import (
     SOURCE_CONFIDENCE, FIELD_WEIGHTS,
     REQUIRED_FACET_FIELDS, SMART_DEFAULTS,
 )
+from ingest_pipeline import build_payloads
 
 __version__ = "0.7.0-dev"
 
+
+# ═══════════════════════════════════════════
+# 摄入管线 — 可编排的步骤流水线
+# ═══════════════════════════════════════════
+
+# ── 步骤函数 ──
+
+def _step_qdrant_check(state: dict) -> dict:
+    """Step 1: 确认 Qdrant 可连通，集合存在"""
+    if not _ensure_collection(state["collection"]):
+        return {"ok": False, "error": "Qdrant 未运行。请先启动 Qdrant（双击 run.bat）。"}
+    return {"ok": True}
+
+
+def _step_read_content(state: dict) -> dict:
+    """Step 2: 从文件或参数中读取文本"""
+    file_path = state.get("file_path")
+    text = state.get("text")
+
+    if file_path:
+        if not os.path.exists(file_path):
+            return {"ok": False, "error": f"文件不存在: {file_path}"}
+        ext = os.path.splitext(file_path)[1].lower()
+        text_formats = (".txt", ".md", ".json", ".csv", ".log")
+        if ext in text_formats:
+            enc = detect_encoding(file_path)
+            try:
+                with open(file_path, "r", encoding=enc) as f:
+                    text = f.read()
+            except UnicodeDecodeError:
+                with open(file_path, "r", encoding="latin-1") as f:
+                    text = f.read()
+        else:
+            result = extract_text(file_path)
+            if not result.get("ok"):
+                return {"ok": False, "error": result.get("error", "文本提取失败")}
+            text = result["text"]
+        state["text"] = text
+        state["source"] = os.path.basename(file_path)
+    elif text:
+        meta = state.get("metadata") or {}
+        state["source"] = meta.get("source", "直接输入")
+        state["text"] = text
+    else:
+        return {"ok": False, "error": "请提供 file_path 或 text"}
+
+    state["source"] = state["source"] or "unknown"
+
+    if not state["text"] or not state["text"].strip():
+        return {"ok": False, "error": "文本内容为空"}
+
+    return {"ok": True}
+
+
+def _step_dedup(state: dict) -> dict:
+    """Step 3: 检查内容哈希，防止重复入库"""
+    if not state.get("skip_duplicates", True):
+        return {"ok": True, "skipped": True}
+
+    content_hash = _text_hash(state["text"])
+    state["content_hash"] = content_hash
+
+    try:
+        resp = requests.post(
+            f"{QDRANT_URL}/collections/{state['collection']}/points/scroll",
+            json={
+                "filter": {
+                    "must": [{"key": "content_hash", "match": {"value": content_hash}}]
+                },
+                "limit": 1
+            },
+            timeout=10
+        )
+        if resp.status_code == 200 and resp.json().get("result", {}).get("points"):
+            dup_source = resp.json()["result"]["points"][0]["payload"].get("source", "未知")
+            return {
+                "ok": False,
+                "error": "内容重复，已跳过",
+                "duplicate_of": dup_source,
+                "content_hash": content_hash,
+            }
+    except Exception:
+        pass  # 去重失败不阻断主流程
+
+    return {"ok": True}
+
+
+def _step_extract_images(state: dict) -> dict:
+    """Step 4: 提取并验证文本中的图片引用"""
+    _ensure_images_dir()
+    image_refs = _extract_images(state["text"])
+    valid_images = []
+    for img_path in image_refs:
+        if os.path.isfile(img_path):
+            valid_images.append(os.path.relpath(os.path.abspath(img_path), PROJECT_DIR))
+        elif os.path.isfile(os.path.join(IMAGES_DIR, os.path.basename(img_path))):
+            valid_images.append(os.path.relpath(os.path.join(IMAGES_DIR, os.path.basename(img_path)), PROJECT_DIR))
+    state["valid_images"] = valid_images
+    return {"ok": True}
+
+
+def _step_chunk(state: dict) -> dict:
+    """Step 5: 将文本切成块"""
+    chunks = _chunk_text(state["text"])
+    if not chunks:
+        return {"ok": False, "error": "切块后无内容"}
+    state["chunks"] = chunks
+    return {"ok": True}
+
+
+def _step_embed(state: dict) -> dict:
+    """Step 6: 为每个块生成嵌入向量"""
+    chunks = state["chunks"]
+    model = state.get("model", EMBED_MODEL)
+
+    try:
+        vectors = _embed(chunks, model=model)
+    except Exception as e:
+        return {"ok": False, "error": f"嵌入失败: {e}"}
+
+    if not vectors:
+        return {"ok": False, "error": "所有块嵌入失败"}
+    if len(vectors) < len(chunks) * 0.5:
+        return {
+            "ok": False,
+            "error": f"嵌入成功率过低 ({len(vectors)}/{len(chunks)})，已中止"
+        }
+    if len(vectors) < len(chunks):
+        print(f"  [WARN] {len(chunks) - len(vectors)}/{len(chunks)} 块嵌入失败，已跳过")
+        state["chunks"] = chunks[:len(vectors)]
+
+    state["vectors"] = vectors
+    return {"ok": True}
+
+
+def _step_pre_store_hooks(state: dict) -> dict:
+    """Step 7: 执行预存储钩子（Nigredo 等外部程序在此介入）
+
+    钩子可从 config/hooks.py 注册表中获取。
+    每个钩子是 callable(state) -> state 的函数。
+    当前默认为空（无钩子），不阻塞管线。
+    """
+    from config.hooks import get_hooks
+    for hook in get_hooks():
+        try:
+            state = hook(state)
+        except Exception as e:
+            print(f"  [WARN] 预存储钩子 {hook.__name__} 执行失败: {e}")
+    return {"ok": True}
+
+
+def _step_build_payloads(state: dict) -> dict:
+    """Step 8: 构建 Qdrant points 列表"""
+    base_meta = state.get("metadata") or {}
+
+    if state.get("field_sources"):
+        base_meta["field_sources"] = state["field_sources"]
+    if state.get("overall_confidence") is not None:
+        base_meta["confidence_overall"] = state["overall_confidence"]
+    base_meta["_valid_images"] = state.get("valid_images", [])
+
+    result = build_payloads(
+        text=state["text"],
+        chunks=state["chunks"],
+        vectors=state["vectors"],
+        base_meta=base_meta,
+        file_path=state.get("file_path") or "",
+        source=state.get("source", "unknown"),
+        model=state.get("model", EMBED_MODEL),
+    )
+    state["points"] = result["points"]
+    state["doc_id"] = result["doc_id"]
+    state["content_hash"] = result["content_hash"]
+    state["valid_images"] = result["valid_images"]
+    state["ingested_at"] = result["ingested_at"]
+    return {"ok": True}
+
+
+def _step_write_qdrant(state: dict) -> dict:
+    """Step 9: 将 points 写入 Qdrant"""
+    try:
+        resp = requests.put(
+            f"{QDRANT_URL}/collections/{state['collection']}/points",
+            json={"points": state["points"]},
+            timeout=30
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        return {"ok": False, "error": f"写入 Qdrant 失败: {e}"}
+    return {"ok": True}
+
+
+def _step_log_ingest(state: dict) -> dict:
+    """Step 10: 写入摄入日志"""
+    _log_ingest({
+        "source_file": state.get("file_path") or "",
+        "source_text": state["text"][:500] if not state.get("file_path") else None,
+        "collection": state["collection"],
+        "doc_id": state["doc_id"],
+        "content_hash": state.get("content_hash", ""),
+        "embed_model": state.get("model", EMBED_MODEL),
+        "ingested_at": state["ingested_at"],
+    })
+    return {"ok": True}
+
+
+# ── 步骤管线定义 ──
+# 每个元素: (步骤名, 函数)
+# 步骤名用于 skip_steps 参数
+PIPELINE = [
+    ("qdrant_check",     _step_qdrant_check),
+    ("read_content",     _step_read_content),
+    ("dedup",            _step_dedup),
+    ("images",           _step_extract_images),
+    ("chunk",            _step_chunk),
+    ("embed",            _step_embed),
+    ("pre_store_hooks",  _step_pre_store_hooks),
+    ("build_payloads",   _step_build_payloads),
+    ("write_qdrant",     _step_write_qdrant),
+    ("log_ingest",       _step_log_ingest),
+]
 
 
 # ═══════════════════════════════════════════
@@ -100,300 +322,130 @@ def ingest(
     metadata: dict = None,
     model: str = EMBED_MODEL,
     skip_duplicates: bool = True,
+    skip_steps: list = None,
     field_sources: dict = None,
     overall_confidence: float = None,
 ) -> dict:
     """
-    摄入文档到知识库。
+    摄入文档到知识库（可编排管线）。
+
+    10 个步骤按序执行，可通过 skip_steps 跳过任意步骤。
 
     参数:
         file_path: 文件路径（与 text 二选一）
         text: 文本内容（与 file_path 二选一）
         collection: Qdrant 集合名
         metadata: 自定义元数据
-        model: Ollama 嵌入模型名
+        model: 嵌入模型名
         skip_duplicates: 是否跳过重复内容
-        field_sources: 字段来源标记 {"content_type": "rule", ...}（阶段二新增）
-        overall_confidence: 程序计算的整体置信度 0.0-1.0（阶段二新增）
+        skip_steps: 要跳过的步骤名列表，如 ["dedup", "images", "log_ingest"]
+        field_sources: 字段来源标记（阶段二新增）
+        overall_confidence: 整体置信度（阶段二新增）
 
     返回:
-        {"ok": true/false, "chunks": N, "collection": "...", "source": "..."}
+        {"ok": true/false, "chunks": N, "collection": "...", "source": "...", ...}
     """
-    if not _ensure_collection(collection):
-        return {"ok": False, "error": "Qdrant 未运行。请先启动 Qdrant（双击 run.bat）。"}
+    skip = set(skip_steps or [])
+    if not skip_duplicates:
+        skip.add("dedup")
 
-    # 读取内容
-    if file_path:
-        if not os.path.exists(file_path):
-            return {"ok": False, "error": f"文件不存在: {file_path}"}
-        # 根据文件扩展名选择读取方式
-        ext = os.path.splitext(file_path)[1].lower()
-        text_formats = (".txt", ".md", ".json", ".csv", ".log")
-        if ext in text_formats:
-            # 文本格式：直接读取（自动检测编码）
-            enc = detect_encoding(file_path)
-            try:
-                with open(file_path, "r", encoding=enc) as f:
-                    text = f.read()
-            except UnicodeDecodeError:
-                with open(file_path, "r", encoding="latin-1") as f:
-                    text = f.read()
-        else:
-            # 二进制格式：调用 extract_text() 提取文本
-            result = extract_text(file_path)
-            if not result.get("ok"):
-                return {"ok": False, "error": result.get("error", "文本提取失败")}
-            text = result["text"]
-        source = os.path.basename(file_path)
-    elif text:
-        source = metadata.get("source", "直接输入") if metadata else "直接输入"
-    else:
-        return {"ok": False, "error": "请提供 file_path 或 text"}
-    source = source or "unknown"  # 防御性兜底
-
-    if not text or not text.strip():
-        return {"ok": False, "error": "文本内容为空"}
-
-    # ── 去重检查 ──
-    content_hash = _text_hash(text)
-    if skip_duplicates:
-        try:
-            resp = requests.post(
-                f"{QDRANT_URL}/collections/{collection}/points/scroll",
-                json={
-                    "filter": {
-                        "must": [{"key": "content_hash", "match": {"value": content_hash}}]
-                    },
-                    "limit": 1
-                },
-                timeout=10
-            )
-            if resp.status_code == 200 and resp.json().get("result", {}).get("points"):
-                return {
-                    "ok": False,
-                    "error": "内容重复，已跳过（使用 --no-dedup 强制入库）",
-                    "duplicate_of": resp.json()["result"]["points"][0]["payload"].get("source", "未知"),
-                    "content_hash": content_hash
-                }
-        except Exception:
-            pass  # 去重检查失败不影响主流程
-
-    # ── 提取图片引用并验证 ──
-    _ensure_images_dir()
-    image_refs = _extract_images(text)
-    valid_images = []
-    for img_path in image_refs:
-        if os.path.isfile(img_path):
-            # D5 修复：存储相对路径（提高可移植性）
-            valid_images.append(os.path.relpath(os.path.abspath(img_path), PROJECT_DIR))
-        elif os.path.isfile(os.path.join(IMAGES_DIR, os.path.basename(img_path))):
-            # D5 修复：存储相对路径（提高可移植性）
-            valid_images.append(os.path.relpath(os.path.join(IMAGES_DIR, os.path.basename(img_path)), PROJECT_DIR))
-
-    # ── 切块 ──
-    chunks = _chunk_text(text)
-    if not chunks:
-        return {"ok": False, "error": "切块后无内容"}
-
-    # ── 嵌入 ──
-    try:
-        vectors = _embed(chunks, model=model)
-    except Exception as e:
-        return {"ok": False, "error": f"嵌入失败: {e}"}
-
-    # ── 嵌入容错：至少 50% 成功才写入 ──
-    if not vectors:
-        return {"ok": False, "error": "所有块嵌入失败"}
-    if len(vectors) < len(chunks) * 0.5:
-        return {
-            "ok": False,
-            "error": f"嵌入成功率过低 ({len(vectors)}/{len(chunks)})，已中止"
-        }
-    # 对齐：vectors 可能少于 chunks（部分失败跳过），取前 N 个匹配
-    if len(vectors) < len(chunks):
-        print(f"  [WARN] {len(chunks) - len(vectors)}/{len(chunks)} 块嵌入失败，已跳过")
-        chunks = chunks[:len(vectors)]
-
-    # ── 构建 Qdrant points（v4.0 分组字段结构）──
-    base_meta = metadata or {}
-    # doc_id: 文档级唯一标识（完整 UUID，非截短）
-    doc_id = base_meta.get("doc_id") or str(uuid.uuid4())
-    ingested_at = datetime.now(timezone.utc).isoformat()
-    full_text_hash = _text_hash(text)
-
-    # ── 分面字段（调用 normalize_facet_values 做枚举守卫）──
-    facet_raw = {
-        "content_type":    base_meta.get("content_type", "knowledge"),
-        "domain":          base_meta.get("domain", []),
-        "temporal_nature": base_meta.get("temporal_nature", "timeboxed"),
-        "epistemic_status": base_meta.get("epistemic_status", "unverified"),
-    }
-    facet_norm = normalize_facet_values(facet_raw)
-    content_type    = facet_norm["content_type"]
-    domain          = facet_norm["domain"] if isinstance(facet_norm["domain"], list) else [facet_norm["domain"]]
-    temporal_nature = facet_norm["temporal_nature"]
-    epistemic_status = facet_norm["epistemic_status"]
-
-    # ── 生命周期（普通字段）──
-    lifecycle      = base_meta.get("lifecycle", "published")
-    project_source = base_meta.get("project_source", "")  # 降级为普通字段
-
-    # ── 知识管理字段 ──
-    knowledge_type = base_meta.get("knowledge_type", "")
-    is_personal    = base_meta.get("is_personal", False)
-    trust_score    = base_meta.get("trust_score", 3)
-    tags           = base_meta.get("tags", [])
-    is_canonical   = base_meta.get("is_canonical", True)
-    relations      = base_meta.get("relations", [])
-    keywords       = base_meta.get("keywords", [])
-    auto_summary   = base_meta.get("auto_summary", "")
-
-    # ── 时效性 + 版本 ──
-    title          = base_meta.get("title") or source
-    publish_date   = base_meta.get("publish_date", None)
-    effective_date = base_meta.get("effective_date", None)
-    expiry_date    = base_meta.get("expiry_date", None)
-    version        = base_meta.get("version", "")
-
-    # ── 来源元数据 ──
-    author        = base_meta.get("author", "")
-    source_url    = base_meta.get("source_url", "")
-    file_type     = base_meta.get("file_type", "txt")
-    ingest_method = base_meta.get("ingest_method", "manual")
-
-    # ── 内容创作字段 ──
-    target_platform = base_meta.get("target_platform", "none")
-    related_product = base_meta.get("related_product", "")
-
-    # ── 系统字段 ──
-    language     = base_meta.get("language") or _detect_language(text)
-    access_level = base_meta.get("access_level", "private")
-    batch_id     = base_meta.get("batch_id", "")
-    needs_review = base_meta.get("needs_review", False)  # 置信度路由标记
-
-    # ── 阶段二新增：字段来源 + 置信度 ──
-    field_sources_payload = field_sources or {}
-    confidence_payload = overall_confidence if overall_confidence is not None else base_meta.get("confidence_overall", None)
-
-    points = []
-    for i, (chunk, vec) in enumerate(zip(chunks, vectors)):
-        # 每个 chunk 用随机 64-bit ID（不依赖 Qdrant points_count，零并发冲突）
-        point_id = uuid.uuid4().int >> 64
-        points.append({
-            "id": point_id,
-            "vector": vec,
-            "payload": {
-                # ── 内容字段 ──
-                "text": chunk,
-                "title": title,
-                "source": source,
-                "chunk_index": i,
-                "total_chunks": len(chunks),
-                "doc_id": doc_id,
-                "doc_uid": doc_id,  # 稳定文档标识（= doc_id，未来去重键）
-                "content_hash": full_text_hash,
-                "images": valid_images,
-
-                # ── 分面字段 ──
-                "content_type": content_type,
-                "domain": domain if isinstance(domain, list) else [domain],
-                "temporal_nature": temporal_nature,
-                "epistemic_status": epistemic_status,
-
-                # ── 生命周期（普通字段）──
-                "lifecycle": lifecycle,
-                "project_source": project_source,
-                "udc_code": base_meta.get("udc_code", ""),
-
-                # ── 知识管理 ──
-                "knowledge_type": knowledge_type,
-                "is_personal": is_personal,
-                "trust_score": trust_score,
-                "tags": tags if isinstance(tags, list) else [],
-                "is_canonical": is_canonical,
-                "relations": relations if isinstance(relations, list) else [],
-                "keywords": keywords if isinstance(keywords, list) else [],
-                "auto_summary": auto_summary,
-
-                # ── timeline（所有时间戳聚合）──
-                "timeline": {
-                    "published": publish_date,
-                    "effective": effective_date,
-                    "expiry": expiry_date,
-                    "ingested": ingested_at,
-                    "accessed": None,
-                },
-
-                # ── origin（来源追踪聚合）──
-                "origin": {
-                    "author": author,
-                    "source_url": source_url,
-                    "file_type": file_type,
-                    "ingest_method": ingest_method,
-                    "source_path": file_path or "",  # F8 修复：存储原始文件路径
-                },
-
-                # ── stats（使用统计聚合）──
-                "stats": {
-                    "access_count": 0,
-                    "starred": False,
-                },
-
-                # ── 内容创作 ──
-                "target_platform": target_platform,
-                "related_product": related_product,
-                "version": version,
-
-                # ── 系统字段 ──
-                "language": language,
-                "access_level": access_level,
-                "batch_id": batch_id,
-                "is_archived": False,
-                "needs_review": needs_review,
-
-                # ── 阶段二新增：字段来源 + 置信度 ──
-                "field_sources": field_sources_payload,
-                "confidence": confidence_payload,
-
-                # ── 预留扩展字段 ──
-                "ext_text1": None, "ext_text2": None, "ext_text3": None,
-                "ext_text4": None, "ext_text5": None,
-                "ext_num1":  None, "ext_num2":  None, "ext_num3": None,
-                "ext_bool1": None, "ext_bool2": None, "ext_bool3": None,
-                "ext_date1": None, "ext_date2": None, "ext_date3": None,
-            }
-        })
-
-    # 写入 Qdrant
-    try:
-        resp = requests.put(
-            f"{QDRANT_URL}/collections/{collection}/points",
-            json={"points": points},
-            timeout=30
-        )
-        resp.raise_for_status()
-    except Exception as e:
-        return {"ok": False, "error": f"写入 Qdrant 失败: {e}"}
-
-    # 写入摄入日志
-    _log_ingest({
-        "source_file": file_path or "",
-        "source_text": text[:500] if not file_path else None,
+    state = {
+        "file_path": file_path,
+        "text": text,
         "collection": collection,
-        "doc_id": doc_id,
-        "content_hash": full_text_hash,
-        "embed_model": model,
-        "ingested_at": ingested_at,
-    })
+        "metadata": metadata or {},
+        "model": model,
+        "skip_duplicates": skip_duplicates,
+        "field_sources": field_sources,
+        "overall_confidence": overall_confidence,
+        # 中间结果（步骤中填充）
+        "source": "",
+        "content_hash": "",
+        "chunks": [],
+        "vectors": [],
+        "valid_images": [],
+        "doc_id": "",
+        "ingested_at": "",
+        "points": [],
+    }
+
+    for step_name, step_fn in PIPELINE:
+        if step_name in skip:
+            continue
+        result = step_fn(state)
+        if not result.get("ok"):
+            return result
 
     return {
         "ok": True,
-        "chunks": len(chunks),
-        "collection": collection,
-        "source": source,
-        "doc_id": doc_id,
-        "content_hash": full_text_hash,
-        "images": valid_images
+        "chunks": len(state["chunks"]),
+        "collection": state["collection"],
+        "source": state["source"],
+        "doc_id": state["doc_id"],
+        "content_hash": state.get("content_hash", ""),
+        "images": state["valid_images"],
+    }
+
+
+def ingest_batch(
+    items: list,
+    collection: str = DEFAULT_COLLECTION,
+    metadata: dict = None,
+    model: str = EMBED_MODEL,
+    skip_duplicates: bool = True,
+    skip_steps: list = None,
+    field_sources: dict = None,
+    overall_confidence: float = None,
+) -> dict:
+    """
+    批量摄入：多个文件/文本依次走同一管线。
+
+    参数:
+        items: 列表，每个元素是 {"file_path": "..."} 或 {"text": "..."}
+        其余参数同 ingest()
+
+    返回:
+        {
+            "ok": True,
+            "total": N,
+            "succeeded": M,
+            "failed": F,
+            "results": [{"ok": true/false, "source": "...", ...}, ...]
+        }
+    """
+    results = []
+    succeeded = 0
+    failed = 0
+
+    for item in items:
+        file_path = item.get("file_path")
+        text = item.get("text")
+        item_meta = item.get("metadata", {})
+        merged_meta = {**(metadata or {}), **item_meta}
+
+        result = ingest(
+            file_path=file_path,
+            text=text,
+            collection=collection,
+            metadata=merged_meta,
+            model=model,
+            skip_duplicates=skip_duplicates,
+            skip_steps=skip_steps,
+            field_sources=field_sources,
+            overall_confidence=overall_confidence,
+        )
+        results.append(result)
+        if result.get("ok"):
+            succeeded += 1
+        else:
+            failed += 1
+
+    return {
+        "ok": True,
+        "total": len(items),
+        "succeeded": succeeded,
+        "failed": failed,
+        "results": results,
     }
 
 

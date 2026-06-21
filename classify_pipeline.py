@@ -15,11 +15,15 @@ Extracted from kb_query.py (A5 refactor).
 import json
 import re
 import os
+import logging
 from typing import Optional
 from collections import defaultdict
 
+logger = logging.getLogger(__name__)
+
 from config.classifications import normalize_facet_values, CLASSIFY_RULES
-from search_engine import _call_llm_api, _extract_json_block
+from search_engine import _call_llm_api, _extract_json_block, LLM_API_KEY, LLM_BASE_URL, LLM_MODEL
+from text_pipeline import detect_language
 
 
 # ═══════════════════════════════════════════
@@ -341,6 +345,65 @@ def calculate_confidence(annotated: dict) -> float:
     return round(total, 2)
 
 
+def _validate_and_normalize_merged(merged: dict) -> dict:
+    """
+    验证并规范化 merged 字典中的字段值。
+    
+    处理:
+        1. normalize 4 个分面字段（枚举守卫）
+        2. 校验 keywords 是 list
+        3. 校验 title/author/auto_summary 是 str
+        4. 校验 is_personal 是 bool
+        5. 校验 trust_score 是 0-5 int
+    
+    原地修改 merged，并返回。
+    """
+    # ── normalize 分面字段 ──
+    flat_for_normalize = {}
+    for f in REQUIRED_FACET_FIELDS:
+        fd = merged.get(f)
+        if fd and isinstance(fd, dict):
+            flat_for_normalize[f] = fd.get("value")
+    normalize_facet_values(flat_for_normalize)
+    for f in REQUIRED_FACET_FIELDS:
+        if merged.get(f) and isinstance(merged[f], dict):
+            merged[f]["value"] = flat_for_normalize.get(f, merged[f]["value"])
+    
+    # ── 校验 keywords 是 list ──
+    kw_field = merged.get("keywords")
+    if kw_field and isinstance(kw_field, dict):
+        kw_val = kw_field.get("value", [])
+        if not isinstance(kw_val, list):
+            kw_val = [str(kw_val)] if kw_val else []
+        kw_val = [str(k).strip()[:50] for k in kw_val if k]
+        kw_field["value"] = kw_val
+    
+    # ── 校验 title/author/auto_summary 是 str ──
+    for str_field in ["title", "author", "auto_summary"]:
+        fd = merged.get(str_field)
+        if fd and isinstance(fd, dict):
+            fd["value"] = str(fd.get("value", "")).strip()[:200 if str_field == "auto_summary" else 100]
+    
+    # ── 校验 is_personal 是 bool ──
+    ip_fd = merged.get("is_personal")
+    if ip_fd and isinstance(ip_fd, dict):
+        ip_val = ip_fd.get("value", False)
+        if isinstance(ip_val, str):
+            ip_fd["value"] = ip_val.strip().lower() in ("true", "yes", "1")
+        else:
+            ip_fd["value"] = bool(ip_val)
+    
+    # ── 校验 trust_score 是 0-5 int ──
+    ts_fd = merged.get("trust_score")
+    if ts_fd and isinstance(ts_fd, dict):
+        try:
+            ts_fd["value"] = max(0, min(5, int(ts_fd.get("value", 3))))
+        except (ValueError, TypeError):
+            ts_fd["value"] = 3
+    
+    return merged
+
+
 # ── T6: classify_document() 主函数 ──
 
 def classify_document(text: str, file_metadata: dict = None, project_source: str = "通用") -> dict:
@@ -403,50 +466,8 @@ def classify_document(text: str, file_metadata: dict = None, project_source: str
     # 填充默认值
     fill_defaults(merged)
     
-    # ── normalize 分面字段 ──
-    # 提取扁平值做 normalize，再写回
-    flat_for_normalize = {}
-    for f in REQUIRED_FACET_FIELDS:
-        fd = merged.get(f)
-        if fd and isinstance(fd, dict):
-            flat_for_normalize[f] = fd.get("value")
-    normalize_facet_values(flat_for_normalize)
-    # 写回
-    for f in REQUIRED_FACET_FIELDS:
-        if merged.get(f) and isinstance(merged[f], dict):
-            merged[f]["value"] = flat_for_normalize.get(f, merged[f]["value"])
-    
-    # 校验 keywords 是 list
-    kw_field = merged.get("keywords")
-    if kw_field and isinstance(kw_field, dict):
-        kw_val = kw_field.get("value", [])
-        if not isinstance(kw_val, list):
-            kw_val = [str(kw_val)] if kw_val else []
-        kw_val = [str(k).strip()[:50] for k in kw_val if k]
-        kw_field["value"] = kw_val
-    
-    # 校验 title/author/auto_summary 是 str
-    for str_field in ["title", "author", "auto_summary"]:
-        fd = merged.get(str_field)
-        if fd and isinstance(fd, dict):
-            fd["value"] = str(fd.get("value", "")).strip()[:200 if str_field == "auto_summary" else 100]
-    
-    # 校验 is_personal 是 bool
-    ip_fd = merged.get("is_personal")
-    if ip_fd and isinstance(ip_fd, dict):
-        ip_val = ip_fd.get("value", False)
-        if isinstance(ip_val, str):
-            ip_fd["value"] = ip_val.strip().lower() in ("true", "yes", "1")
-        else:
-            ip_fd["value"] = bool(ip_val)
-    
-    # 校验 trust_score 是 0-5 int
-    ts_fd = merged.get("trust_score")
-    if ts_fd and isinstance(ts_fd, dict):
-        try:
-            ts_fd["value"] = max(0, min(5, int(ts_fd.get("value", 3))))
-        except (ValueError, TypeError):
-            ts_fd["value"] = 3
+    # ── 验证并规范化所有字段值 ──
+    _validate_and_normalize_merged(merged)
     
     # ── Layer 3: 程序计算置信度 ──
     overall_conf = calculate_confidence(merged)
