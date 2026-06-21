@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from nicegui import ui
 
 import kb_query
+import classify_pipeline
 import config.classifications as classifications
 from field_cfg import FIELD_DISPLAY_CFG, SOURCE_ICON, PANEL_VALUES
 from panel_funcs import build_result_panel, build_advanced_panel
@@ -362,7 +363,7 @@ def page_ingest():
                 # 传入文件元数据 + 当前项目（让 Layer 0 填 project_source）
                 _proj = STATE.get("current_project", "通用")
                 result = await asyncio.to_thread(
-                    kb_query.classify_document,
+                    classify_pipeline.classify_document,
                     ingest_content,
                     STATE.get("auto_metadata") if isinstance(STATE.get("auto_metadata"), dict) else None,
                     _proj,

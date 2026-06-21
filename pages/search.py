@@ -11,6 +11,7 @@ import asyncio
 from nicegui import ui
 
 import kb_query
+import search_engine
 from utils.ui_shared import render_chunk_card, refresh_system_state
 from utils.state import STATE
 from utils.ui_shared import build_left_drawer
@@ -66,7 +67,7 @@ def page_search():
                         ui.label("🔍 正在搜索相关文档...").classes("text-sm text-gray-400")
 
                     search_result = await asyncio.to_thread(
-                        kb_query.search,
+                        search_engine.search,
                         query,
                         top_k.value,
                         search_col.value,
@@ -79,11 +80,11 @@ def page_search():
                         ui.label("🤖 正在调用 AI 合成答案（首次加载模型约需30秒）...").classes("text-sm text-gray-400")
 
                     result = await asyncio.to_thread(
-                        kb_query.answer,
+                        search_engine.answer,
                         query,
                         top_k.value,
                         search_col.value,
-                        output_dir=kb_query.OUTPUT_DIR,
+                        output_dir=search_engine.OUTPUT_DIR,
                     )
 
                     with results_area:
@@ -129,7 +130,7 @@ def page_search():
                         await asyncio.sleep(0.1)
 
                     result = await asyncio.to_thread(
-                        kb_query.search,
+                        search_engine.search,
                         query,
                         top_k.value,
                         search_col.value,
