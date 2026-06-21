@@ -113,4 +113,5 @@ if __name__ in {"__main__", "__mp_main__"}:
         port=8080,
         reload=False,
         show=False,
+        storage_secret="citrinitas-mindforge-secret",
     )
