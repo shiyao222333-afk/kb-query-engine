@@ -3,7 +3,7 @@
 由 main.py 通过 `from field_cfg import FIELD_DISPLAY_CFG, SOURCE_ICON, PANEL_VALUES` 导入。
 """
 
-from config import classifications
+import config.classifications as classifications
 
 
 # ════════════════════════════════════════

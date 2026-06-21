@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from nicegui import ui
 
 import kb_query
-from config import classifications
+import config.classifications as classifications
 from field_cfg import FIELD_DISPLAY_CFG, SOURCE_ICON, PANEL_VALUES
 from panel_funcs import build_result_panel, build_advanced_panel
 from utils.file_handler import (
