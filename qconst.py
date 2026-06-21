@@ -11,6 +11,9 @@ import requests
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 QDRANT_URL = os.environ.get("KB_QDRANT_URL", "http://127.0.0.1:6333")
 DEFAULT_COLLECTION = "athanor_v1"
+OLLAMA_URL = "http://localhost:11434"
+EMBED_MODEL = os.environ.get("KB_EMBED_MODEL", "qwen3-embedding:4b")
+EMBED_DIM = 2560
 IMAGES_DIR = os.path.join(PROJECT_DIR, "local_data", "images")
 INGEST_LOG_PATH = os.path.join(PROJECT_DIR, "local_data", "ingest_log.jsonl")
 
