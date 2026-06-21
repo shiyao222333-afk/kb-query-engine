@@ -5,6 +5,7 @@ Citrinitas · 熔知 — 共享 UI 函数
 main.py 和 pages/*.py 都从此模块导入共享函数。
 """
 
+import asyncio
 from nicegui import ui, app
 import requests
 import kb_query
@@ -14,6 +15,7 @@ from utils.state import STATE
 # ═══════════════════════════════════════════
 # 嵌入模型预设（main.py 和 pages/config.py 共用）
 # ═══════════════════════════════════════════
+
 EMBED_PRESETS = {
     "qwen3-embedding": "qwen3-embedding:4b",
     "bge-m3": "bge-m3:latest",
@@ -75,6 +77,13 @@ def set_active_collection(name: str):
 
 _STATUS_WIDGETS = {}   # 状态栏控件引用（供 _status_tick 回调更新）
 _GLOBAL_TIMER = None    # app.timer 只创建一次
+_MAIN_LOOP = None       # 事件循环引用（在事件循环线程中设置）
+
+
+def set_main_loop():
+    """在事件循环线程中调用，保存 loop 引用供后台线程使用。"""
+    global _MAIN_LOOP
+    _MAIN_LOOP = asyncio.get_event_loop()
 
 
 def _status_tick():
@@ -87,9 +96,7 @@ def _status_tick():
     def _do_refresh():
         try:
             refresh_system_state()
-            # 用 ui.update() 或直接在 UI 线程更新控件
-            # NiceGUI 的 ui.label.set_text() 必须在事件循环线程调用
-            # 所以用 ui.timer(0.1, ..., once=True) 回到事件循环线程
+            # 用 call_soon_threadsafe 将 UI 更新调度到事件循环线程
             def _update_ui():
                 try:
                     if STATE["qdrant_online"]:
@@ -103,7 +110,8 @@ def _status_tick():
                         w["badge"].props("color=red")
                 except Exception:
                     pass
-            ui.timer(0.1, _update_ui, once=True)
+            if _MAIN_LOOP is not None:
+                _MAIN_LOOP.call_soon_threadsafe(_update_ui)
         except Exception:
             pass
     threading.Thread(target=_do_refresh, daemon=True).start()
@@ -112,6 +120,9 @@ def _status_tick():
 def build_left_drawer():
     """构建左侧导航抽屉（所有页面共用）。"""
     global _GLOBAL_TIMER, _STATUS_WIDGETS
+
+    # 保存事件循环引用（供 _status_tick 的后台线程使用）
+    set_main_loop()
 
     # startup() 已经填好了 STATE["stats"]，直接读取，不再重复请求 Qdrant
     if STATE.get("qdrant_online"):

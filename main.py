@@ -18,7 +18,7 @@ if os.path.exists(ENV_FILE):
 from utils.state import STATE
 from utils.ui_shared import (
     render_chunk_card, build_left_drawer, refresh_system_state,
-    set_active_collection, EMBED_PRESETS, _status_tick,
+    set_active_collection, EMBED_PRESETS, _status_tick, set_main_loop,
 )
 import kb_query
 
@@ -51,8 +51,8 @@ def _save_env(key: str, val: str):
 def startup():
     """启动回调：只做轻量操作，不阻塞事件循环。"""
     print("[启动] startup 回调开始（事件循环线程）", flush=True)
+    set_main_loop()
     threading.Thread(target=_auto_shutdown, daemon=True).start()
-    app.timer(10.0, _status_tick)
     print(f"[启动] startup 回调完成 — STATE 已有 stats={STATE.get('stats')}", flush=True)
 
 def _auto_shutdown():
