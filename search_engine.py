@@ -29,6 +29,7 @@ from qconst import (
 )
 from qdrant_client import _ensure_collection
 from text_pipeline import _embed
+from reranker import rerank_results, rerank_results_simple
 
 try:
     from fpdf import FPDF
@@ -181,6 +182,29 @@ def search(
         )
         resp.raise_for_status()
         results = resp.json()["result"]
+        
+        # ── 重排序（S2）：使用嵌入模型重新打分 ──
+        try:
+            # 从环境变量读取重排序配置
+            rerank_enabled = os.environ.get("KB_RERANK_ENABLED", "true").lower() == "true"
+            rerank_model = os.environ.get("KB_RERANK_MODEL", "qwen3-embedding:4b")
+            rerank_top_n = int(os.environ.get("KB_RERANK_TOP_N", "20"))
+            
+            if rerank_enabled:
+                # 先尝试使用 Ollama 嵌入 API
+                results = rerank_results(
+                    query=query,
+                    results=results,
+                    model=rerank_model,
+                    top_n=rerank_top_n
+                )
+        except Exception as e:
+            print(f"[Search] 重排序失败: {e}，尝试简单重排序")
+            try:
+                # 降级：使用简单关键词匹配
+                results = rerank_results_simple(query, results, top_n=rerank_top_n)
+            except Exception as e2:
+                print(f"[Search] 简单重排序也失败: {e2}，使用原始排序")
     except Exception as e:
         return {"ok": False, "error": f"搜索失败: {e}"}
 
@@ -229,6 +253,8 @@ def search(
             "access_level":    payload.get("access_level", "private"),
             "batch_id":        payload.get("batch_id", ""),
             "is_archived":     payload.get("is_archived", False),
+            # 重排序分数（如果有）
+            "rerank_score":   r.get("rerank_score", None),
         })
 
     return {
