@@ -13,6 +13,8 @@ from typing import Optional
 
 from qconst import PROJECT_DIR
 from text_pipeline import _text_hash, _detect_language
+from qdrant_client.http.models import SparseVector
+from qdrant_client.http.models import SparseVector
 from config.classifications import normalize_facet_values
 
 
@@ -20,6 +22,7 @@ def build_payloads(
     text: str,
     chunks: list,
     vectors: list,
+    sparse_vectors: Optional[list] = None,
     base_meta: Optional[dict] = None,
     file_path: str = "",
     source: str = "unknown",
@@ -110,7 +113,13 @@ def build_payloads(
         point_id = uuid.uuid4().int >> 64
         points.append({
             "id": point_id,
-            "vector": vec,
+            "vector": {
+                "dense": vec,
+                "sparse": SparseVector(
+                    indices=sparse_vectors[i][0] if sparse_vectors else [],
+                    values=sparse_vectors[i][1] if sparse_vectors else []
+                ) if sparse_vectors else vec,
+            },
             "payload": {
                 # ── 内容字段 ──
                 "text": chunk,

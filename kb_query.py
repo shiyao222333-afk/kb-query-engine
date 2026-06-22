@@ -45,6 +45,7 @@ import tempfile
 from docx import Document
 from bs4 import BeautifulSoup
 from config.classifications import normalize_facet_values, CLASSIFY_RULES
+from sparse_encoder import encode_sparse, encode_sparse_query
 
 from qconst import (
     PROJECT_DIR, QDRANT_URL, DEFAULT_COLLECTION,
@@ -222,6 +223,26 @@ def _step_embed(state: dict) -> dict:
     state["vectors"] = vectors
     return {"ok": True}
 
+def _step_generate_sparse_vectors(state: dict) -> dict:
+    """Step 6.5: 为每个块生成稀疏向量（BM25）"""
+    chunks = state['chunks']
+    sparse_vectors = []
+    
+    try:
+        for chunk in chunks:
+            indices, values = encode_sparse(chunk, update_vocab=True)
+            sparse_vectors.append((indices, values))
+    except Exception as e:
+        return {'ok': False, 'error': f'稀疏向量生成失败: {e}'}
+    
+    if not sparse_vectors:
+        return {'ok': False, 'error': '所有块稀疏向量生成失败'}
+    
+    state['sparse_vectors'] = sparse_vectors
+    return {'ok': True}
+
+
+
 
 def _step_pre_store_hooks(state: dict) -> dict:
     """Step 7: 执行预存储钩子（Nigredo 等外部程序在此介入）
@@ -303,6 +324,7 @@ PIPELINE = [
     ("dedup",            _step_dedup),
     ("images",           _step_extract_images),
     ("chunk",            _step_chunk),
+    ("sparse_embed",    _step_generate_sparse_vectors),
     ("embed",            _step_embed),
     ("pre_store_hooks",  _step_pre_store_hooks),
     ("build_payloads",   _step_build_payloads),
