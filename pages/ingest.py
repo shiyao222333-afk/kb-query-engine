@@ -181,23 +181,45 @@ def page_ingest():
                     placeholder="直接粘贴内容...",
                 ).props("outlined rows=12").classes("w-full")
 
-                def on_manual_save():
-                    nonlocal ingest_content, ingest_source, ingest_method
+                def on_manual_fill():
                     txt = manual_text.value or ""
+                    if not txt.strip():
+                        ui.notify("⚠️ 请先输入内容", type="warning")
+                        return
+                    # 填入共享编辑区
                     content_text.set_value(txt)
-                    ingest_content = txt
-                    ingest_source = "手动输入"
                     source_label.set_text("来源：手动输入")
-                    ingest_method = "manual"
-                    STATE["ingest_content"] = txt
-                    STATE["ingest_source"] = "手动输入"
-                    STATE["ingest_method"] = "manual"
-                    STATE["source_path"] = ""  # 手动输入，无源文件
+                    STATE["source_path"] = ""
+                    confirm_label.set_text(f"📝 手动输入 · {len(txt)} 字 · 点击下方「确认内容」")
+                    confirm_label.classes("text-sm text-blue-500")
                     # T10: 5000 字截断提醒
                     if len(txt) > 5000:
                         ui.notify(f"⚠️ 内容超过 5000 字（{len(txt)} 字），AI 分析将仅使用前 5000 字", type="warning")
 
-                ui.button("📥 确认内容", on_click=on_manual_save).props("color=blue")
+                ui.button("📋 填入编辑区", on_click=on_manual_fill, color="blue")
+
+        # ── 确认按钮（共享，两 Tab 外）──
+        confirm_row = ui.row().classes("w-full items-center gap-4 mt-2")
+        with confirm_row:
+            def on_confirm():
+                nonlocal ingest_content, ingest_source, ingest_method
+                txt = content_text.value or ""
+                if not txt.strip():
+                    ui.notify("⚠️ 请先输入或上传内容", type="warning")
+                    return
+                ingest_content = txt
+                STATE["ingest_content"] = txt
+                # 如果已通过文件上传或手动填入设置了来源，保留；否则默认手动输入
+                if not ingest_source:
+                    ingest_source = "手动输入"
+                    ingest_method = "manual"
+                    STATE["ingest_source"] = "手动输入"
+                    STATE["ingest_method"] = "manual"
+                    STATE["source_path"] = ""
+                confirm_label.set_text("✅ 内容已确认")
+                confirm_label.classes("text-sm text-green-600")
+            ui.button("📥 确认内容", on_click=on_confirm, color="blue")
+            confirm_label = ui.label("").classes("text-sm text-gray-400")
 
         ui.separator()
 
