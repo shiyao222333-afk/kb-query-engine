@@ -87,6 +87,11 @@ def _auto_shutdown():
             idle += 1
             if idle >= IDLE_MAX:
                 print("\n[Citrinitas] 浏览器已关闭，自动退出。")
+                # 先优雅停止守望文件夹，释放锁和资源
+                try:
+                    watcher_v2.stop_watcher_v2()
+                except Exception as e:
+                    print(f"[Citrinitas] 守望停止异常: {e}")
                 os._exit(0)
 
 

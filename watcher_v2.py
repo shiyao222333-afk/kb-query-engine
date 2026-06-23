@@ -44,7 +44,6 @@ from config.settings import (
     WATCH_V2_QUEUE_MAX_SIZE,
     WATCH_V2_MAX_AUTO_RETRIES,
     WATCH_V2_AUTO_RETRY_DELAY,
-    WATCH_V2_INFRA_RETRY_INTERVAL,
     WATCH_V2_DLQ_TTL_DAYS,
     WATCH_V2_NOTIFY_ON_FATAL,
     WATCH_V2_TEXT_DENSITY_THRESHOLD,
@@ -56,7 +55,8 @@ from text_pipeline import (
     ocr_image as _ocr_image,
     extract_text as _extract_text,
 )
-from qconst import QDRANT_URL, OLLAMA_URL
+from classify_pipeline import classify_document
+from qconst import QDRANT_URL, OLLAMA_URL, DEFAULT_COLLECTION, CONFIDENCE_LOW, CONFIDENCE_HIGH
 from utils.activity_log import log_activity
 
 # ═══════════════════════════════════════════
@@ -641,8 +641,6 @@ def _extract_pages(filepath: str, ext: str) -> list[dict]:
 def _process_file(filepath: str):
     """处理单个文件：逐页提取 → WLNK 决策 → 分类 → 摄入 → 保留/删除。"""
     import kb_query
-    from classify_pipeline import classify_document
-    from qconst import DEFAULT_COLLECTION, CONFIDENCE_LOW, CONFIDENCE_HIGH
 
     filename = os.path.basename(filepath)
     ext = os.path.splitext(filename)[1].lower()
@@ -976,15 +974,14 @@ def _processing_loop_v2(queue: Queue, stop_event: threading.Event):
                 action="watch_v2_infra_down",
                 detail=f"基础设施不可用 (qdrant={infra['qdrant']}, ollama={infra['ollama']})",
             )
-            retry_deadline = time.time() + WATCH_V2_INFRA_RETRY_INTERVAL
-            while time.time() < retry_deadline:
-                if stop_event.is_set():
-                    return
-                time.sleep(1)
-            try:
-                queue.put(filepath, timeout=0.5)
-            except Exception:
-                pass
+            # 标记为 retry，不阻塞处理循环
+            # _recover_retry_files + _rescue_orphaned_files 会在恢复时重新入队
+            _append_state({
+                "file": filename,
+                "state": "retry",
+                "step": "infra_check",
+                "error": f"基础设施不可用 (qdrant={infra['qdrant']}, ollama={infra['ollama']})",
+            })
             continue
 
         _watch_stats["infra_ok"] = True
@@ -1074,49 +1071,99 @@ def _recover_retry_files(queue: Queue, stop_event: threading.Event):
 
 
 def _cleanup_expired_states():
-    """清理过期的状态记录（DLQ TTL）。"""
+    """清理过期的状态记录 + 去重（仅保留每文件最后一条）+ 文件过大时压缩。
+
+    频率控制：每 CLEANUP_INTERVAL 秒最多一次，避免频繁全量重写。
+    """
     if WATCH_V2_DLQ_TTL_DAYS <= 0:
         return
     if not os.path.isfile(STATE_FILE):
         return
 
+    # ── 频率控制 ──
+    CLEANUP_INTERVAL = 300  # 5 分钟
+    MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
     now = time.time()
+
+    if not hasattr(_cleanup_expired_states, "_last_run"):
+        _cleanup_expired_states._last_run = 0.0
+
+    # 检查是否需要运行（定时或文件过大）
+    elapsed = now - _cleanup_expired_states._last_run
+    try:
+        file_size = os.path.getsize(STATE_FILE)
+    except OSError:
+        return
+    force = file_size > MAX_FILE_SIZE
+
+    if not force and elapsed < CLEANUP_INTERVAL:
+        return
+
+    _cleanup_expired_states._last_run = now
+
     ttl_seconds = WATCH_V2_DLQ_TTL_DAYS * 86400
     removed = 0
+    dedup_saved = 0
 
     try:
         with _state_lock:
+            # 读取所有行，保留每文件最后一条 + 过滤过期
+            latest_per_file = {}  # filename → line_index → (line_content, ts)
             lines = []
             with open(STATE_FILE, "r", encoding="utf-8") as f:
-                for line in f:
+                for idx, line in enumerate(f):
                     line_stripped = line.strip()
                     if not line_stripped:
                         continue
                     try:
                         entry = json.loads(line_stripped)
-                        ts_str = entry.get("ts", "")
-                        if ts_str:
-                            try:
-                                ts = datetime.fromisoformat(ts_str).timestamp()
-                                if now - ts <= ttl_seconds:
-                                    lines.append(line_stripped)
-                                else:
-                                    removed += 1
-                            except ValueError:
-                                lines.append(line_stripped)
-                        else:
-                            lines.append(line_stripped)
                     except json.JSONDecodeError:
                         lines.append(line_stripped)
+                        continue
 
+                    fname = entry.get("file", "")
+                    if not fname:
+                        lines.append(line_stripped)
+                        continue
+
+                    # 检查 TTL 过期
+                    ts_str = entry.get("ts", "")
+                    expired = False
+                    if ts_str:
+                        try:
+                            ts = datetime.fromisoformat(ts_str).timestamp()
+                            if now - ts > ttl_seconds:
+                                expired = True
+                        except ValueError:
+                            pass
+
+                    if expired:
+                        removed += 1
+                        continue
+
+                    # 去重：只保留每文件最新的一条
+                    if fname in latest_per_file:
+                        # 替换旧条目（用新行覆盖旧位置）
+                        old_idx = latest_per_file[fname]
+                        lines[old_idx] = None  # 标记删除
+                        dedup_saved += 1
+
+                    latest_per_file[fname] = len(lines)
+                    lines.append(line_stripped)
+
+            # 过滤掉被覆盖的旧行
+            lines = [l for l in lines if l is not None]
+
+            # 写回
             with open(STATE_FILE, "w", encoding="utf-8") as f:
                 for line in lines:
                     f.write(line + "\n")
 
-        if removed > 0:
+        reason = "force" if force else "scheduled"
+        if removed > 0 or dedup_saved > 0:
             log_activity(
                 action="watch_v2_state_cleanup",
-                detail=f"清理 {removed} 条过期状态记录",
+                detail=f"清理 {removed} 条过期 + 去重 {dedup_saved} 条 ({reason}, {file_size//1024} KB)",
             )
     except Exception:
         pass

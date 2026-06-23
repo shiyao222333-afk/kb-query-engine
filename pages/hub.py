@@ -24,7 +24,6 @@ from utils.activity_log import log_activity, read_recent_activities
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DLQ_DIR = os.path.join(PROJECT_DIR, "local_data", "dead_letter")
 INBOX_DIR = os.path.join(PROJECT_DIR, "data", "inbox")
-STATE_FILE = os.path.join(PROJECT_DIR, "data", "file_state.jsonl")
 
 
 def _load_dlq_files() -> list:
@@ -80,27 +79,12 @@ def _ensure_inbox_dir():
 
 
 def _load_inbox_files() -> list:
-    """加载统一收件箱文件列表（含状态）。"""
+    """加载统一收件箱文件列表（含状态）。使用 watcher_v2 的锁保护状态读取。"""
+    import watcher_v2
     items = []
 
-    # 加载 file_state.jsonl
-    states = {}
-    if os.path.isfile(STATE_FILE):
-        try:
-            with open(STATE_FILE, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        entry = json.loads(line)
-                        fname = entry.get("file", "")
-                        if fname:
-                            states[fname] = entry
-                    except json.JSONDecodeError:
-                        pass
-        except Exception:
-            pass
+    # 获取锁保护的状态数据（而非直接读 JSONL）
+    states = watcher_v2.get_all_states()
 
     # 扫描 inbox 目录
     if not os.path.isdir(INBOX_DIR):
@@ -110,10 +94,7 @@ def _load_inbox_files() -> list:
         fp = os.path.join(INBOX_DIR, filename)
         if not os.path.isfile(fp):
             continue
-        # 跳过临时文件
-        if filename.lower().startswith("~$") or filename.lower().endswith(".tmp"):
-            continue
-        if filename in (".gitkeep", "thumbs.db", "desktop.ini"):
+        if watcher_v2._is_temp_file(filename):
             continue
 
         state_entry = states.get(filename, {})
@@ -148,6 +129,7 @@ def _retry_inbox_file(filename: str) -> bool:
 
 def _delete_inbox_file(filename: str) -> bool:
     """删除收件箱中的文件及其状态记录。"""
+    import watcher_v2
     fp = os.path.join(INBOX_DIR, filename)
     deleted = False
 
@@ -159,26 +141,8 @@ def _delete_inbox_file(filename: str) -> bool:
         except OSError:
             return False
 
-    # 删除状态记录（重写 file_state.jsonl）
-    if os.path.isfile(STATE_FILE):
-        try:
-            lines = []
-            with open(STATE_FILE, "r", encoding="utf-8") as f:
-                for line in f:
-                    line_stripped = line.strip()
-                    if not line_stripped:
-                        continue
-                    try:
-                        entry = json.loads(line_stripped)
-                        if entry.get("file", "") != filename:
-                            lines.append(line_stripped)
-                    except json.JSONDecodeError:
-                        lines.append(line_stripped)
-            with open(STATE_FILE, "w", encoding="utf-8") as f:
-                for line in lines:
-                    f.write(line + "\n")
-        except Exception:
-            pass
+    # 删除状态记录（委托给 watcher_v2，锁保护）
+    watcher_v2._remove_state(filename)
 
     if deleted:
         log_activity("inbox_delete", "", filename)
@@ -186,20 +150,9 @@ def _delete_inbox_file(filename: str) -> bool:
 
 
 def _get_inbox_stats() -> dict:
-    """获取收件箱统计。"""
-    items = _load_inbox_files()
-    stats = {"total": len(items), "pending": 0, "failed": 0, "needs_review": 0, "retry": 0}
-    for item in items:
-        s = item.get("state", "pending")
-        if s == "pending":
-            stats["pending"] += 1
-        elif s == "failed":
-            stats["failed"] += 1
-        elif s == "needs_review":
-            stats["needs_review"] += 1
-        elif s == "retry":
-            stats["retry"] += 1
-    return stats
+    """获取收件箱统计（委托给 watcher_v2，锁保护）。"""
+    import watcher_v2
+    return watcher_v2.get_inbox_stats()
 
 
 @ui.page("/hub")
