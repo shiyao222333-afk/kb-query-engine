@@ -78,6 +78,7 @@ _stop_event: threading.Event | None = None
 _heartbeat_time: float = 0.0
 _heartbeat_lock = threading.Lock()
 _state_lock = threading.Lock()
+_pending_removals: set = set()  # 延迟删除集合（批量重写优化）
 _watch_stats: dict = {
     "processed": 0,
     "failed": 0,
@@ -94,7 +95,7 @@ _watch_stats: dict = {
 # ═══════════════════════════════════════════
 
 def _load_state() -> dict:
-    """加载 file_state.jsonl，返回 {filename: latest_entry} 映射。"""
+    """加载 file_state.jsonl，返回 {filename: latest_entry} 映射。自动过滤 _pending_removals。"""
     state = {}
     if not os.path.isfile(STATE_FILE):
         return state
@@ -114,6 +115,9 @@ def _load_state() -> dict:
                         pass
     except Exception:
         pass
+    # 过滤掉待删除的文件
+    for fname in _pending_removals:
+        state.pop(fname, None)
     return state
 
 
@@ -134,29 +138,12 @@ def _append_state(entry: dict):
 
 
 def _remove_state(filename: str):
-    """从 file_state.jsonl 中移除某个文件的状态记录。
-    实现方式：重写整个文件，跳过匹配的行（因为 JSONL 是 append-only）。"""
-    if not os.path.isfile(STATE_FILE):
-        return
-    try:
-        with _state_lock:
-            lines = []
-            with open(STATE_FILE, "r", encoding="utf-8") as f:
-                for line in f:
-                    line_stripped = line.strip()
-                    if not line_stripped:
-                        continue
-                    try:
-                        entry = json.loads(line_stripped)
-                        if entry.get("file", "") != filename:
-                            lines.append(line_stripped)
-                    except json.JSONDecodeError:
-                        lines.append(line_stripped)
-            with open(STATE_FILE, "w", encoding="utf-8") as f:
-                for line in lines:
-                    f.write(line + "\n")
-    except Exception:
-        pass
+    """标记文件状态为待删除（延迟批量重写，避免每文件全量 I/O）。
+    
+    实际重写在 _cleanup_expired_states() 中批量执行。
+    _load_state() 会自动过滤 _pending_removals 中的文件。
+    """
+    _pending_removals.add(filename)
 
 
 def _get_file_state(filename: str) -> dict | None:
@@ -638,9 +625,16 @@ def _extract_pages(filepath: str, ext: str) -> list[dict]:
 # 文件处理主流程
 # ═══════════════════════════════════════════
 
-def _process_file(filepath: str):
-    """处理单个文件：逐页提取 → WLNK 决策 → 分类 → 摄入 → 保留/删除。"""
+def _process_file(filepath: str, cancel_event: threading.Event = None):
+    """处理单个文件：逐页提取 → WLNK 决策 → 分类 → 摄入 → 保留/删除。
+    
+    cancel_event: 可选的取消信号。超时线程会设置此事件，本函数在检查点轮询后退出。
+    """
     import kb_query
+
+    # 超时检查辅助函数
+    def _cancelled():
+        return cancel_event is not None and cancel_event.is_set()
 
     filename = os.path.basename(filepath)
     ext = os.path.splitext(filename)[1].lower()
@@ -649,6 +643,14 @@ def _process_file(filepath: str):
     max_retries = WATCH_V2_MAX_AUTO_RETRIES
 
     while retry_count <= max_retries:
+        if _cancelled():
+            _append_state({
+                "file": filename, "state": "retry",
+                "step": "timeout", "error": "处理超时，已取消"
+            })
+            log_activity(action="watch_v2_cancelled", source=filename,
+                         detail="处理超时取消，已重新入队")
+            return
         # ── 格式检查 ──
         supported = {".txt", ".md", ".json", ".csv", ".log", ".pdf", ".docx",
                      ".pptx", ".epub", ".html", ".htm", ".xml", ".jpg", ".jpeg",
@@ -859,28 +861,52 @@ def _process_file(filepath: str):
 
 
 def _process_file_with_timeout(filepath: str):
-    """带超时保护的文件处理。"""
+    """带超时保护的文件处理。
+    
+    超时后: 发送取消信号给子线程 → 标记 retry → 回写入队。
+    子线程收到取消信号后在检查点退出，避免状态冲突。
+    """
     filename = os.path.basename(filepath)
-
-    result = {"ok": False, "error": "timeout"}
+    cancel_event = threading.Event()
 
     def target():
-        nonlocal result
         try:
-            _process_file(filepath)
-            result["ok"] = True
+            _process_file(filepath, cancel_event=cancel_event)
         except Exception as e:
-            result["error"] = str(e)
+            log_activity(
+                action="watch_v2_internal_error",
+                detail=f"处理异常: {e}",
+                source=filename,
+            )
 
-    thread = threading.Thread(target=target, daemon=True)
+    thread = threading.Thread(target=target, daemon=True, name=f"watcher-{filename[:20]}")
     thread.start()
     thread.join(timeout=WATCH_V2_PROCESSING_TIMEOUT)
 
     if thread.is_alive():
-        _handle_failure(
+        # 发送取消信号，让子线程在检查点退出
+        cancel_event.set()
+
+        # 标记失败并检查策略
+        failure_result = _handle_failure(
             filepath, filename, "timeout",
             f"处理超时（>{WATCH_V2_PROCESSING_TIMEOUT}秒）",
         )
+
+        # 根据策略决定是否重新入队
+        if failure_result in ("retry", "retry_later"):
+            if _queue is not None:
+                try:
+                    _queue.put(filepath, timeout=0.5)
+                except Exception:
+                    log_activity(
+                        action="watch_v2_requeue_failed",
+                        detail=f"超时后重新入队失败: {filename}",
+                        source=filename,
+                    )
+
+        # 短暂等待子线程响应取消信号（最多 3 秒）
+        thread.join(timeout=3)
 
 
 # ═══════════════════════════════════════════
@@ -1071,12 +1097,11 @@ def _recover_retry_files(queue: Queue, stop_event: threading.Event):
 
 
 def _cleanup_expired_states():
-    """清理过期的状态记录 + 去重（仅保留每文件最后一条）+ 文件过大时压缩。
+    """清理过期的状态记录 + 去重（仅保留每文件最后一条）+ 应用延迟删除 + 文件过大时压缩。
 
     频率控制：每 CLEANUP_INTERVAL 秒最多一次，避免频繁全量重写。
+    有 pending removals 或压缩触发时强制运行。
     """
-    if WATCH_V2_DLQ_TTL_DAYS <= 0:
-        return
     if not os.path.isfile(STATE_FILE):
         return
 
@@ -1088,22 +1113,24 @@ def _cleanup_expired_states():
     if not hasattr(_cleanup_expired_states, "_last_run"):
         _cleanup_expired_states._last_run = 0.0
 
-    # 检查是否需要运行（定时或文件过大）
+    # 检查是否需要运行（定时 / 文件过大 / 有 pending removals）
     elapsed = now - _cleanup_expired_states._last_run
     try:
         file_size = os.path.getsize(STATE_FILE)
     except OSError:
         return
     force = file_size > MAX_FILE_SIZE
+    has_pending = len(_pending_removals) > 0
 
-    if not force and elapsed < CLEANUP_INTERVAL:
+    if not force and not has_pending and elapsed < CLEANUP_INTERVAL:
         return
 
     _cleanup_expired_states._last_run = now
 
-    ttl_seconds = WATCH_V2_DLQ_TTL_DAYS * 86400
-    removed = 0
+    ttl_seconds = WATCH_V2_DLQ_TTL_DAYS * 86400 if WATCH_V2_DLQ_TTL_DAYS > 0 else 0
+    expired_removed = 0
     dedup_saved = 0
+    pending_applied = 0
 
     try:
         with _state_lock:
@@ -1126,10 +1153,15 @@ def _cleanup_expired_states():
                         lines.append(line_stripped)
                         continue
 
+                    # 应用 pending removals（延迟删除）
+                    if fname in _pending_removals:
+                        pending_applied += 1
+                        continue
+
                     # 检查 TTL 过期
                     ts_str = entry.get("ts", "")
                     expired = False
-                    if ts_str:
+                    if ts_str and ttl_seconds > 0:
                         try:
                             ts = datetime.fromisoformat(ts_str).timestamp()
                             if now - ts > ttl_seconds:
@@ -1138,7 +1170,7 @@ def _cleanup_expired_states():
                             pass
 
                     if expired:
-                        removed += 1
+                        expired_removed += 1
                         continue
 
                     # 去重：只保留每文件最新的一条
@@ -1160,11 +1192,22 @@ def _cleanup_expired_states():
                     f.write(line + "\n")
 
         reason = "force" if force else "scheduled"
-        if removed > 0 or dedup_saved > 0:
+        total_cleaned = expired_removed + dedup_saved + pending_applied
+        if total_cleaned > 0:
+            parts = []
+            if expired_removed > 0:
+                parts.append(f"过期 {expired_removed}")
+            if dedup_saved > 0:
+                parts.append(f"去重 {dedup_saved}")
+            if pending_applied > 0:
+                parts.append(f"移除 {pending_applied}")
             log_activity(
                 action="watch_v2_state_cleanup",
-                detail=f"清理 {removed} 条过期 + 去重 {dedup_saved} 条 ({reason}, {file_size//1024} KB)",
+                detail=f"清理 {' + '.join(parts)} 条 ({reason}, {file_size//1024} KB)",
             )
+        
+        # 清除已应用的 pending removals
+        _pending_removals.clear()
     except Exception:
         pass
 
