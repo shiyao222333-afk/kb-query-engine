@@ -79,6 +79,7 @@ watch_v2:
   max_file_size_mb: 50           # 单文件大小上限（0 = 不限制）
   processing_timeout: 600        # 单文件处理超时（秒）
   queue_max_size: 100            # 处理队列最大长度
+  queue_put_timeout: 0.5         # 队列入队等待超时（秒）
 
   # 文件保留策略（内容驱动，非格式驱动）
   retention:
