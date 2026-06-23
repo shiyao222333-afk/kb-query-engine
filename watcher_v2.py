@@ -65,7 +65,7 @@ from utils.activity_log import log_activity
 
 INBOX_DIR = os.path.join(PROJECT_DIR, WATCH_V2_INBOX_DIR)
 STATE_FILE = os.path.join(PROJECT_DIR, WATCH_V2_STATE_FILE)
-LOCK_FILE = os.path.join(PROJECT_DIR, "data", ".watch_v2.lock")
+LOCK_FILE = os.path.join(os.path.dirname(STATE_FILE), ".watch_v2.lock")
 
 # ═══════════════════════════════════════════
 # 全局状态
@@ -78,11 +78,13 @@ _stop_event: threading.Event | None = None
 _heartbeat_time: float = 0.0
 _heartbeat_lock = threading.Lock()
 _state_lock = threading.Lock()
+_stats_lock = threading.Lock()
 _pending_removals: set = set()  # 延迟删除集合（批量重写优化）
 _watch_stats: dict = {
     "processed": 0,
     "failed": 0,
     "skipped": 0,
+    "deleted": 0,
     "pending": 0,
     "needs_review": 0,
     "running": False,
@@ -116,8 +118,12 @@ def _load_state() -> dict:
                         pass
             # 在锁内快照待删除集合（避免与 _cleanup_expired_states 清除竞争）
             removals_snapshot = _pending_removals.copy()
-    except Exception:
-        pass
+    except Exception as e:
+        log_activity(
+            action="watch_v2_state_load_failed",
+            detail=f"读取状态文件失败: {e}",
+        )
+        removals_snapshot = set()
     # 过滤掉待删除的文件
     for fname in removals_snapshot:
         state.pop(fname, None)
@@ -125,14 +131,15 @@ def _load_state() -> dict:
 
 
 def _append_state(entry: dict):
-    """追加一行到 file_state.jsonl。"""
+    """追加一行到 file_state.jsonl。不修改入参 dict。"""
     try:
         with _state_lock:
             state_dir = os.path.dirname(STATE_FILE)
             os.makedirs(state_dir, exist_ok=True)
-            entry["ts"] = datetime.now(timezone.utc).isoformat()
+            entry_copy = dict(entry)
+            entry_copy["ts"] = datetime.now(timezone.utc).isoformat()
             with open(STATE_FILE, "a", encoding="utf-8") as f:
-                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                f.write(json.dumps(entry_copy, ensure_ascii=False) + "\n")
     except Exception as e:
         log_activity(
             action="watch_v2_state_write_failed",
@@ -255,6 +262,21 @@ def _check_infra() -> dict:
     return result
 
 
+def _check_disk_space(min_free_mb: int = 100) -> dict:
+    """检查 INBOX_DIR 所在磁盘的可用空间。
+    
+    Returns:
+        {"ok": bool, "free_mb": float, "total_mb": float}
+    """
+    try:
+        usage = shutil.disk_usage(INBOX_DIR)
+        free_mb = usage.free / (1024 * 1024)
+        total_mb = usage.total / (1024 * 1024)
+        return {"ok": free_mb >= min_free_mb, "free_mb": free_mb, "total_mb": total_mb}
+    except Exception:
+        return {"ok": True, "free_mb": -1, "total_mb": -1}  # 无法检查时不阻塞
+
+
 def _ensure_dir(path: str):
     """确保目录存在。"""
     os.makedirs(path, exist_ok=True)
@@ -262,22 +284,24 @@ def _ensure_dir(path: str):
 
 # ── OCR 就绪状态 ──
 _ocr_ready: bool | None = None
+_ocr_lock = threading.Lock()
 
 
-def _check_ocr_ready() -> bool:
-    """检查 OCR 引擎是否可用。"""
+def _check_ocr_ready(force: bool = False) -> bool:
+    """检查 OCR 引擎是否可用。加上线程锁和强制重检开关。"""
     global _ocr_ready
-    if _ocr_ready is not None:
-        return _ocr_ready
-    try:
-        from paddleocr import PaddleOCR
-        _ocr_ready = True
-    except ImportError:
-        _ocr_ready = False
-        log_activity(
-            action="watch_v2_ocr_unavailable",
-            detail="PaddleOCR 未安装，图片文件将标记为需要审核",
-        )
+    with _ocr_lock:
+        if _ocr_ready is not None and not force:
+            return _ocr_ready
+        try:
+            from paddleocr import PaddleOCR
+            _ocr_ready = True
+        except ImportError:
+            _ocr_ready = False
+            log_activity(
+                action="watch_v2_ocr_unavailable",
+                detail="PaddleOCR 未安装，图片文件将标记为需要审核",
+            )
     return _ocr_ready
 
 
@@ -421,7 +445,7 @@ def _handle_failure(filepath: str, filename: str, step: str, error_msg: str, ret
                 "retry_count": retry_count,
                 "failure_type": failure_type,
             })
-            _watch_stats["needs_review"] += 1
+            with _stats_lock: _watch_stats["needs_review"] += 1
             log_activity(
                 action="watch_v2_retry_exhausted",
                 detail=f"[{step}] {error_msg} (重试耗尽)",
@@ -456,7 +480,7 @@ def _handle_failure(filepath: str, filename: str, step: str, error_msg: str, ret
             "retry_count": retry_count,
             "failure_type": failure_type,
         })
-        _watch_stats["needs_review"] += 1
+        with _stats_lock: _watch_stats["needs_review"] += 1
         log_activity(
             action="watch_v2_needs_review",
             detail=f"[{step}] {error_msg}",
@@ -474,7 +498,7 @@ def _handle_failure(filepath: str, filename: str, step: str, error_msg: str, ret
             "retry_count": retry_count,
             "failure_type": failure_type,
         })
-        _watch_stats["failed"] += 1
+        with _stats_lock: _watch_stats["failed"] += 1
         log_activity(
             action="watch_v2_failed",
             detail=f"[{step}] {error_msg}",
@@ -493,12 +517,12 @@ def _handle_failure(filepath: str, filename: str, step: str, error_msg: str, ret
             detail=f"[{step}] {error_msg} (文件已删除)",
             source=filename,
         )
-        _watch_stats["skipped"] += 1
+        with _stats_lock: _watch_stats["deleted"] += 1
         return "skip"
 
     # ── skip ──
     if strategy == "skip":
-        _watch_stats["skipped"] += 1
+        with _stats_lock: _watch_stats["skipped"] += 1
         return "skip"
 
     return "failed"
@@ -593,6 +617,12 @@ def _extract_pages(filepath: str, ext: str) -> list[dict]:
                         "ocr_conf": None,
                     })
         except ImportError:
+            if not getattr(_extract_pages, "_pdfplumber_warned", False):
+                _extract_pages._pdfplumber_warned = True
+                log_activity(
+                    action="watch_v2_pdfplumber_missing",
+                    detail="pdfplumber 未安装，PDF 文件将无法提取文本。安装: pip install pdfplumber",
+                )
             pages.append({"text": "", "images": [], "tables": [], "ocr_conf": None})
         except Exception:
             pages.append({"text": "", "images": [], "tables": [], "ocr_conf": None})
@@ -642,18 +672,14 @@ def _process_file(filepath: str, cancel_event: threading.Event = None):
 
     filename = os.path.basename(filepath)
     ext = os.path.splitext(filename)[1].lower()
-    _watch_stats["infra_ok"] = True
+    with _stats_lock: _watch_stats["infra_ok"] = True
     retry_count = 0
     max_retries = WATCH_V2_MAX_AUTO_RETRIES
 
     while retry_count <= max_retries:
         if _cancelled():
-            _append_state({
-                "file": filename, "state": "retry",
-                "step": "timeout", "error": "处理超时，已取消"
-            })
             log_activity(action="watch_v2_cancelled", source=filename,
-                         detail="处理超时取消，已重新入队")
+                         detail="处理超时取消，由主线程接管")
             return
         # ── 格式检查 ──
         supported = {".txt", ".md", ".json", ".csv", ".log", ".pdf", ".docx",
@@ -672,11 +698,21 @@ def _process_file(filepath: str, cancel_event: threading.Event = None):
                                     f"文件过大 ({size_mb:.1f}MB > {WATCH_V2_MAX_FILE_SIZE_MB}MB)")
                     return
             except OSError as e:
-                _handle_failure(filepath, filename, "read_error", str(e))
+                result = _handle_failure(filepath, filename, "read_error", str(e), retry_count)
+                if result == "retry":
+                    retry_count += 1
+                    time.sleep(WATCH_V2_AUTO_RETRY_DELAY)
+                    continue
                 return
 
         # ── 检查文件是否仍存在 ──
         if not os.path.isfile(filepath):
+            _append_state({
+                "file": filename, "state": "failed",
+                "step": "read_error", "error": "文件在处理前已不存在",
+                "failure_type": "read_error",
+            })
+            with _stats_lock: _watch_stats["failed"] += 1
             return
 
         # ── OCR 就绪检查（图片文件）──
@@ -692,6 +728,7 @@ def _process_file(filepath: str, cancel_event: threading.Event = None):
             return
 
         # ── 逐页提取 + 内容分析 ──
+        # _extract_pages 内部已 catch 所有 Exception，外层 try/except 是防御性兜底
         try:
             pages = _extract_pages(filepath, ext)
         except Exception as e:
@@ -704,10 +741,6 @@ def _process_file(filepath: str, cancel_event: threading.Event = None):
 
         # 提取后检查取消信号（OCR 可能耗时很长）
         if _cancelled():
-            _append_state({
-                "file": filename, "state": "retry",
-                "step": "timeout", "error": "处理超时取消（OCR后）"
-            })
             return
 
         if not pages or not any(p.get("text", "").strip() for p in pages):
@@ -739,10 +772,6 @@ def _process_file(filepath: str, cancel_event: threading.Event = None):
 
         # ── AI 分类 ──
         if _cancelled():
-            _append_state({
-                "file": filename, "state": "retry",
-                "step": "timeout", "error": "处理超时取消（分类前）"
-            })
             return
             
         try:
@@ -784,10 +813,6 @@ def _process_file(filepath: str, cancel_event: threading.Event = None):
 
         # ── 摄入 ──
         if _cancelled():
-            _append_state({
-                "file": filename, "state": "retry",
-                "step": "timeout", "error": "处理超时取消（摄入前）"
-            })
             return
             
         try:
@@ -816,7 +841,7 @@ def _process_file(filepath: str, cancel_event: threading.Event = None):
                     source=filename,
                 )
                 _append_state({"file": filename, "state": "done"})
-                _watch_stats["processed"] += 1
+                with _stats_lock: _watch_stats["processed"] += 1
                 try:
                     os.remove(filepath)
                 except OSError:
@@ -831,7 +856,11 @@ def _process_file(filepath: str, cancel_event: threading.Event = None):
             return
 
         # ── 成功处理 ──
-        _watch_stats["processed"] += 1
+        # 最后一次取消检查：子线程可能在摄入完成后才收到取消信号
+        # 此时主线程 timeout handler 已接管，不应再写状态或删文件
+        if _cancelled():
+            return
+        with _stats_lock: _watch_stats["processed"] += 1
 
         # 如果 needs_review，记录状态
         if needs_review:
@@ -842,7 +871,7 @@ def _process_file(filepath: str, cancel_event: threading.Event = None):
                 "error": f"置信度 ({overall_conf:.2f}) 低于高阈值 ({CONFIDENCE_HIGH})",
                 "confidence": overall_conf,
             })
-            _watch_stats["needs_review"] += 1
+            with _stats_lock: _watch_stats["needs_review"] += 1
 
         # ── 文件保留/删除 ──
         if retention["keep_file"]:
@@ -874,8 +903,16 @@ def _process_file(filepath: str, cancel_event: threading.Event = None):
 
         # ── 处理成功，清理/保留状态记录 ──
         if needs_review:
-            # needs_review 状态已在上面写入，保留不清除
-            pass
+            # needs_review 状态已在上面写入，补充文件保留信息
+            # 如果文件被删，UI 可据此隐藏"查看文件"按钮
+            if not retention["keep_file"]:
+                _append_state({
+                    "file": filename,
+                    "state": "needs_review",
+                    "file_deleted": True,
+                    "step": "classify",
+                    "confidence": overall_conf,
+                })
         else:
             # 清理旧状态（retry/failed 等），但不写 done：
             # 文件会被删除（keep_file=false），Qdrant content_hash 负责去重
@@ -899,20 +936,24 @@ def _process_file_with_timeout(filepath: str):
         try:
             _process_file(filepath, cancel_event=cancel_event)
         except Exception as e:
+            # 如果已被取消，状态由主线程 timeout handler 负责
+            if cancel_event.is_set():
+                return
             log_activity(
                 action="watch_v2_internal_error",
                 detail=f"处理异常: {e}",
                 source=filename,
             )
             # 写入 failed 状态，防止文件被静默丢失
+            failure_type = _classify_failure("unknown", str(e))
             _append_state({
                 "file": filename,
                 "state": "failed",
                 "step": "unknown",
                 "error": f"内部异常: {e}",
-                "failure_type": "unknown",
+                "failure_type": failure_type,
             })
-            _watch_stats["failed"] += 1
+            with _stats_lock: _watch_stats["failed"] += 1
 
     thread = threading.Thread(target=target, daemon=True, name=f"watcher-{filename[:20]}")
     thread.start()
@@ -945,8 +986,9 @@ def _process_file_with_timeout(filepath: str):
                         source=filename,
                     )
 
-        # 短暂等待子线程响应取消信号（最多 3 秒）
-        thread.join(timeout=3)
+        # 等待子线程响应取消信号（最长 30 秒，给 LLM/Qdrant 等长阻塞调用足够时间到达检查点）
+        POST_CANCEL_WAIT = 30
+        thread.join(timeout=POST_CANCEL_WAIT)
 
 
 # ═══════════════════════════════════════════
@@ -971,13 +1013,13 @@ class WatchHandlerV2(FileSystemEventHandler):
         filename = os.path.basename(filepath)
 
         if _is_temp_file(filename):
-            _watch_stats["skipped"] += 1
+            with _stats_lock: _watch_stats["skipped"] += 1
             return
 
         try:
             self.queue.put(filepath, timeout=0.5)
         except Exception:
-            _watch_stats["skipped"] += 1
+            with _stats_lock: _watch_stats["skipped"] += 1
             log_activity(
                 action="watch_v2_queue_full",
                 detail=f"队列已满，丢弃文件: {filename}",
@@ -997,7 +1039,7 @@ def _processing_loop_v2(queue: Queue, stop_event: threading.Event):
     # 恢复 retry 状态的文件
     _recover_retry_files(queue, stop_event)
 
-    _watch_stats["running"] = True
+    with _stats_lock: _watch_stats["running"] = True
 
     loop_count = 0
     while not stop_event.is_set():
@@ -1010,6 +1052,12 @@ def _processing_loop_v2(queue: Queue, stop_event: threading.Event):
             _cleanup_expired_states()
             # 定期救援扫描：救回因队列溢出被丢弃的文件
             loop_count += 1
+            # 定期重检基础设施：infra 可能已恢复
+            # 避免 infra_ok 维持 False 导致 _rescue_orphaned_files 跳过救援
+            if loop_count % 15 == 0:  # ~30 秒一次
+                infra = _check_infra()
+                with _stats_lock:
+                    _watch_stats["infra_ok"] = (infra["qdrant"] and infra["ollama"])
             if loop_count % 30 == 0:  # ~60 秒一次
                 _rescue_orphaned_files(queue)
             continue
@@ -1021,7 +1069,7 @@ def _processing_loop_v2(queue: Queue, stop_event: threading.Event):
             continue
 
         if _is_temp_file(filename):
-            _watch_stats["skipped"] += 1
+            with _stats_lock: _watch_stats["skipped"] += 1
             continue
 
         # 检查已有状态（跳过 failed/needs_review 的文件，除非手动触发重试）
@@ -1035,7 +1083,7 @@ def _processing_loop_v2(queue: Queue, stop_event: threading.Event):
         # 基础设施检查
         infra = _check_infra()
         if not (infra["qdrant"] and infra["ollama"]):
-            _watch_stats["infra_ok"] = False
+            with _stats_lock: _watch_stats["infra_ok"] = False
             log_activity(
                 action="watch_v2_infra_down",
                 detail=f"基础设施不可用 (qdrant={infra['qdrant']}, ollama={infra['ollama']})",
@@ -1050,7 +1098,19 @@ def _processing_loop_v2(queue: Queue, stop_event: threading.Event):
             })
             continue
 
-        _watch_stats["infra_ok"] = True
+        with _stats_lock: _watch_stats["infra_ok"] = True
+
+        # 磁盘空间检查
+        disk = _check_disk_space(min_free_mb=100)
+        if not disk["ok"]:
+            log_activity(
+                action="watch_v2_disk_full",
+                detail=f"磁盘空间不足: {disk['free_mb']:.0f}MB 可用",
+            )
+            result = _handle_failure(filepath, filename, "any", "disk_full")
+            if result == "retry_later":
+                continue
+            return
 
         # 写入完成检测
         if not _is_write_complete(filepath):
@@ -1066,7 +1126,7 @@ def _processing_loop_v2(queue: Queue, stop_event: threading.Event):
         # 处理文件
         _process_file_with_timeout(filepath)
 
-    _watch_stats["running"] = False
+    with _stats_lock: _watch_stats["running"] = False
     log_activity(action="watch_v2_stopped", detail="守望文件夹 v2 处理循环已停止")
 
 
@@ -1085,7 +1145,7 @@ def _scan_existing_files_v2(queue: Queue):
         try:
             queue.put(fp, timeout=0.5)
         except Exception:
-            _watch_stats["skipped"] += 1
+            with _stats_lock: _watch_stats["skipped"] += 1
 
 
 def _rescue_orphaned_files(queue: Queue):
@@ -1097,7 +1157,9 @@ def _rescue_orphaned_files(queue: Queue):
         return
     
     # 基础设施检查 — infra down 时不救援，等恢复后 _recover_retry_files 会处理
-    if not _watch_stats.get("infra_ok", True):
+    with _stats_lock:
+        infra_ok = _watch_stats.get("infra_ok", True)
+    if not infra_ok:
         return
     
     state = _load_state()
@@ -1270,8 +1332,13 @@ def _cleanup_expired_states():
                 action="watch_v2_state_cleanup",
                 detail=f"清理 {' + '.join(parts)} 条 ({reason}, {file_size//1024} KB)",
             )
-    except Exception:
-        pass
+    except Exception as e:
+        log_activity(
+            action="watch_v2_state_cleanup_failed",
+            detail=f"清理状态文件失败: {e}",
+        )
+        if WATCH_V2_NOTIFY_ON_FATAL:
+            print(f"[watcher_v2] ⚠️ 清理状态文件失败: {e}", file=sys.stderr)
 
 
 # ═══════════════════════════════════════════
@@ -1499,7 +1566,7 @@ def start_watcher_v2() -> threading.Thread | None:
     )
     _worker_thread.start()
 
-    _watch_stats["running"] = True
+    with _stats_lock: _watch_stats["running"] = True
     _write_lock_file()
 
     log_activity(action="watch_v2_started", detail="守望文件夹 v2 已启动")
@@ -1522,7 +1589,7 @@ def stop_watcher_v2():
     if _worker_thread and _worker_thread.is_alive():
         _worker_thread.join(timeout=10)
 
-    _watch_stats["running"] = False
+    with _stats_lock: _watch_stats["running"] = False
     _remove_lock_file()
     log_activity(action="watch_v2_stopped", detail="守望文件夹 v2 已停止")
 
@@ -1539,8 +1606,9 @@ def is_watcher_v2_alive() -> bool:
 def get_watch_v2_stats() -> dict:
     """获取守望文件夹 v2 运行统计。"""
     inbox_stats = get_inbox_stats()
-    _watch_stats["pending"] = inbox_stats["pending"]
-    return _watch_stats.copy()
+    with _stats_lock:
+        _watch_stats["pending"] = inbox_stats["pending"]
+        return _watch_stats.copy()
 
 
 def retry_file_v2(filename: str) -> bool:
@@ -1565,6 +1633,10 @@ def retry_file_v2(filename: str) -> bool:
                 source=filename,
             )
             return True
-        except Exception:
-            pass
+        except Exception as e:
+            log_activity(
+                action="watch_v2_manual_retry_failed",
+                detail=f"手动重试入队失败 (队列满): {filename}",
+                source=filename,
+            )
     return False
