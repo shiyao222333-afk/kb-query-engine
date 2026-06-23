@@ -50,6 +50,7 @@ from config.settings import (
     WATCH_V2_OCR_CONF_THRESHOLD,
     WATCH_V2_TEMP_PATTERNS,
     WATCH_V2_QUEUE_PUT_TIMEOUT,
+    WATCH_V2_CLEANUP_INTERVAL,
 )
 from text_pipeline import (
     analyze_page_content,
@@ -1267,7 +1268,7 @@ def _recover_retry_files(queue: Queue, stop_event: threading.Event):
 def _cleanup_expired_states():
     """清理过期的状态记录 + 去重（仅保留每文件最后一条）+ 应用延迟删除 + 文件过大时压缩。
 
-    频率控制：每 CLEANUP_INTERVAL 秒最多一次，避免频繁全量重写。
+    频率控制：每 WATCH_V2_CLEANUP_INTERVAL 秒最多一次，避免频繁全量重写。
     有 pending removals 或压缩触发时强制运行。
 
     流式处理：两遍扫描（只存行号不存内容），防止大文件 OOM。
@@ -1277,7 +1278,7 @@ def _cleanup_expired_states():
         return
 
     # ── 频率控制 ──
-    CLEANUP_INTERVAL = 300  # 5 分钟
+    # CLEANUP_INTERVAL = 300  # 已移至配置项 WATCH_V2_CLEANUP_INTERVAL
     MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
     now = time.time()
 
@@ -1296,7 +1297,7 @@ def _cleanup_expired_states():
         removals_snapshot = _pending_removals.copy()
     has_pending = len(removals_snapshot) > 0
 
-    if not force and not has_pending and elapsed < CLEANUP_INTERVAL:
+    if not force and not has_pending and elapsed < WATCH_V2_CLEANUP_INTERVAL:
         return
 
     _cleanup_expired_states._last_run = now
