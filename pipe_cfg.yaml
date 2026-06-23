@@ -1,0 +1,84 @@
+# ═══════════════════════════════════════════════════════════════
+# Citrinitas Pipeline Configuration (pipe_cfg.yaml)
+# ═══════════════════════════════════════════════════════════════
+#
+# 这份文件管「配方」—— 知识库的行为参数。
+# 改参数不用改代码，改完重启 Web UI 即生效。
+#
+# ── YAML vs .env 分工 ──
+#   YAML (= 默认配方)        可提交 git，调参用
+#   .env (= 环境差异)        不提交 git，放密钥/路径/URL
+#
+# 规则：
+#   1. 同一个参数同时出现在 YAML 和 .env → .env 优先
+#   2. 密钥(API_KEY) → 只能放 .env，不放 YAML
+#   3. URL(服务地址) → 放 .env（不同机器地址不同）
+#   4. 行为参数(阈值/开关/大小) → 放 YAML（调参用）
+#
+# ═══════════════════════════════════════════════════════════════
+
+# ── 文本切块 ──
+chunk:
+  max_chars: 800                # 每块最大字符数（含中英文混合）
+  overlap: 60                   # 前后块重叠字符数（保持上下文连贯）
+
+# ── 向量嵌入 ──
+embed:
+  model: "qwen3-embedding:4b"   # 嵌入模型名（Ollama 内下载的模型）
+  dim: 2560                     # 向量维度（由模型决定，一般不改）
+  ollama_url: "http://localhost:11434"  # Ollama 服务地址
+
+# ── 搜索 ──
+search:
+  top_k: 5                      # 默认返回结果数
+  score_threshold: 0.3          # 最低相似度（0~1），低于此值的 chunk 丢弃
+  rerank:
+    enabled: true               # 是否启用重排序
+    model: "qwen3-embedding:4b" # 重排序用嵌入模型（可与 embed.model 不同）
+    top_n: 20                   # 重排序前取的候选数
+
+# ── 摄入 ──
+ingest:
+  skip_duplicates: true         # 是否跳过重复内容（基于内容哈希）
+
+# ── 置信度阈值（摄入路由） ──
+confidence:
+  low: 0.40                     # 死信阈值：低于此值 → 死信队列（人工审核）
+  high: 0.75                    # 直接入库阈值：高于此值 → 直接入库
+
+# ── 表格处理 ──
+table_split_threshold: 4        # 表格行数超过此值 → 按行拆分为多个虚拟 chunk
+
+# ── 守望文件夹 ──
+watch:
+  poll_interval: 1.0            # 文件监控轮询间隔（秒）
+  write_complete_checks: 2      # 文件写入完成确认次数（文件大小连续 N 次不变 → 认为写完）
+  write_check_interval: 0.5     # 写入检查间隔（秒）
+  max_file_size_mb: 50          # 单文件大小上限（超限跳过，0 = 不限制）
+  processing_timeout: 600       # 单文件处理超时（秒，超时入 DLQ）
+  dlq_max_size_mb: 500          # 死信队列总大小上限（超限告警）
+  dlq_ttl_days: 30              # 死信条目自动清理（天，0 = 不清理）
+  processed_ttl_days: 30        # 处理后文件保留天数（天，0 = 不清理）
+  staging_ttl_days: 7           # 孤儿 staging 文件清理（天）
+  infra_retry_interval: 30      # 基础设施故障后重试间隔（秒）
+  queue_max_size: 100           # 处理队列最大长度（超限拒绝新文件）
+  temp_patterns:                 # 临时文件忽略模式（不区分大小写）
+    - "~$*"                     # Office 临时文件
+    - "*.tmp"                   # 通用临时文件
+    - "*.part"                  # 下载中文件
+    - "*.crdownload"            # Chrome 下载中文件
+    - "thumbs.db"               # Windows 缩略图缓存
+    - "desktop.ini"             # Windows 文件夹配置
+
+# ═══════════════════════════════════════════════════════════════
+# 以下参数只通过 .env 控制，不在 YAML 中出现：
+#
+#   KB_LLM_API_KEY         LLM API 密钥（必填，保密）
+#   KB_LLM_BASE_URL        LLM API 地址
+#   KB_LLM_MODEL           LLM 模型名
+#   KB_QDRANT_URL          Qdrant 服务地址
+#   KB_TESSERACT_PATH      Tesseract OCR 路径
+#   KB_TESSDATA_PREFIX     Tesseract 语言数据目录
+#   KB_NODE_BIN            Node.js 可执行文件路径
+#   KB_NPM_ROOT            npm 模块根目录
+# ═══════════════════════════════════════════════════════════════

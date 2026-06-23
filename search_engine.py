@@ -26,6 +26,9 @@ from datetime import datetime, timezone
 from qconst import (
     QDRANT_URL, DEFAULT_COLLECTION, PROJECT_DIR,
     _check_qdrant, OLLAMA_URL, EMBED_MODEL, EMBED_DIM,
+    SEARCH_TOP_K, SEARCH_SCORE_THRESHOLD,
+    RERANK_ENABLED, RERANK_MODEL, RERANK_TOP_N,
+    TABLE_SPLIT_THRESHOLD,
 )
 from qdrant_client import _ensure_collection
 from text_pipeline import _embed
@@ -48,14 +51,14 @@ except ImportError:
     HAS_PIL = False
 
 
-TABLE_SPLIT_THRESHOLD = 4
+# TABLE_SPLIT_THRESHOLD — 从 pipe_cfg.yaml 统一导入（见 qconst 顶部）
 
 def search(
     query: str,
-    top_k: int = 5,
+    top_k: int = None,
     collection: str = DEFAULT_COLLECTION,
-    score_threshold: float = 0.3,
-    model: str = EMBED_MODEL,
+    score_threshold: float = None,
+    model: str = None,
     facet_filter: dict = None,
 ) -> dict:
     """
@@ -111,6 +114,14 @@ def search(
     """
     if not _ensure_collection(collection):
         return {"ok": False, "error": "Qdrant 未运行。请先启动 Qdrant（双击 run.bat）。"}
+
+    # 默认值从 pipe_cfg.yaml 读取（参数显式传入时优先）
+    if top_k is None:
+        top_k = SEARCH_TOP_K
+    if score_threshold is None:
+        score_threshold = SEARCH_SCORE_THRESHOLD
+    if model is None:
+        model = EMBED_MODEL
 
     # 嵌入查询
     try:
@@ -225,21 +236,17 @@ def search(
 
         # ── 重排序（S2）：使用嵌入模型重新打分 ──
         try:
-            rerank_enabled = os.environ.get("KB_RERANK_ENABLED", "true").lower() == "true"
-            rerank_model = os.environ.get("KB_RERANK_MODEL", "qwen3-embedding:4b")
-            rerank_top_n = int(os.environ.get("KB_RERANK_TOP_N", "20"))
-
-            if rerank_enabled:
+            if RERANK_ENABLED:
                 results = rerank_results(
                     query=query,
                     results=results,
-                    model=rerank_model,
-                    top_n=rerank_top_n
+                    model=RERANK_MODEL,
+                    top_n=RERANK_TOP_N
                 )
         except Exception as e:
             print(f"[Search] 重排序失败: {e}，尝试简单重排序")
             try:
-                results = rerank_results_simple(query, results, top_n=rerank_top_n)
+                results = rerank_results_simple(query, results, top_n=RERANK_TOP_N)
             except Exception as e2:
                 print(f"[Search] 简单重排序也失败: {e2}，使用原始排序")
     except Exception as e:
@@ -1031,10 +1038,10 @@ def _render_report_html(query: str, synthesis: str, chunks: list, output_dir: st
 
 def answer(
     query: str,
-    top_k: int = 5,
+    top_k: int = None,
     collection: str = DEFAULT_COLLECTION,
-    model: str = EMBED_MODEL,
-    threshold: float = 0.3,
+    model: str = None,
+    threshold: float = None,
     llm_model: str = None,
     llm_base_url: str = None,
     llm_api_key: str = None,
@@ -1049,6 +1056,15 @@ def answer(
         facet_filter: 分面过滤条件（见 search() 函数说明）
     """
     output_dir = output_dir or OUTPUT_DIR
+    # 默认值从 pipe_cfg.yaml 读取（参数显式传入时优先）
+    if top_k is None:
+        top_k = SEARCH_TOP_K
+    if model is None:
+        model = EMBED_MODEL
+    if threshold is None:
+        threshold = SEARCH_SCORE_THRESHOLD
+    if table_split_threshold is None:
+        table_split_threshold = TABLE_SPLIT_THRESHOLD
     # 从 os.environ 实时读取（避免 .env 加载顺序导致的空值）
     llm_model = llm_model or os.environ.get("KB_LLM_MODEL") or LLM_MODEL
     llm_base_url = llm_base_url or os.environ.get("KB_LLM_BASE_URL") or LLM_BASE_URL

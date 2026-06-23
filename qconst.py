@@ -3,6 +3,8 @@ Citrinitas · 熔知 — 共享常量
 
 被 doc_manager / qdrant_client / kb_query 等模块共同引用。
 避免循环导入，内容保持最小化。
+
+调参项从 config/settings.py 统一导入，本文件只保留真正的常量（路径 / 集合名 / 不可调参数）。
 """
 
 import os
@@ -11,11 +13,38 @@ import requests
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 QDRANT_URL = os.environ.get("KB_QDRANT_URL", "http://127.0.0.1:6333")
 DEFAULT_COLLECTION = "athanor_v1"
-OLLAMA_URL = "http://localhost:11434"
-EMBED_MODEL = os.environ.get("KB_EMBED_MODEL", "qwen3-embedding:4b")
-EMBED_DIM = 2560
 IMAGES_DIR = os.path.join(PROJECT_DIR, "local_data", "images")
 INGEST_LOG_PATH = os.path.join(PROJECT_DIR, "local_data", "ingest_log.jsonl")
+
+# ── 从 pipe_cfg.yaml + .env 统一导入调参项 ──
+from config.settings import (
+    OLLAMA_URL,
+    EMBED_MODEL,
+    EMBED_DIM,
+    CHUNK_MAX_CHARS,
+    CHUNK_OVERLAP,
+    SEARCH_TOP_K,
+    SEARCH_SCORE_THRESHOLD,
+    RERANK_ENABLED,
+    RERANK_MODEL,
+    RERANK_TOP_N,
+    INGEST_SKIP_DUPLICATES,
+    CONFIDENCE_LOW,
+    CONFIDENCE_HIGH,
+    TABLE_SPLIT_THRESHOLD,
+    WATCH_POLL_INTERVAL,
+    WATCH_WRITE_COMPLETE_CHECKS,
+    WATCH_WRITE_CHECK_INTERVAL,
+    WATCH_MAX_FILE_SIZE_MB,
+    WATCH_PROCESSING_TIMEOUT,
+    WATCH_DLQ_MAX_SIZE_MB,
+    WATCH_DLQ_TTL_DAYS,
+    WATCH_PROCESSED_TTL_DAYS,
+    WATCH_STAGING_TTL_DAYS,
+    WATCH_INFRA_RETRY_INTERVAL,
+    WATCH_QUEUE_MAX_SIZE,
+    WATCH_TEMP_PATTERNS,
+)
 
 
 def _check_qdrant() -> bool:

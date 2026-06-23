@@ -40,6 +40,9 @@ pillow>=10.0.0
 # ── 中文分词 ──
 jieba>=0.42
 
+# ── 守望文件夹（文件监控）──
+watchdog>=4.0
+
 # ── OCR ──
 paddlepaddle>=2.6.0
 paddleocr>=2.7.0

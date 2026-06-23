@@ -172,15 +172,16 @@ def page_config():
 
             # ── 系统配置 ──
             with ui.tab_panel(sys_tab):
+                from config.settings import CONFIDENCE_LOW, CONFIDENCE_HIGH
+
                 ui.markdown("### 置信度路由阈值")
                 ui.markdown("*AI 分析后按置信度分三档：≥高阈值直接入库 / 中间待审核 / <低阈值进死信队列。*")
-
                 ui.markdown("**死信阈值**（低于此值进死信队列）")
                 conf_low = ui.slider(
                     min=0.10,
                     max=0.60,
                     step=0.05,
-                    value=float(os.environ.get("KB_CONFIDENCE_LOW", "0.40")),
+                    value=CONFIDENCE_LOW,
                 ).classes("w-64").props("label-always")
 
                 ui.markdown("**入库阈值**（高于此值直接入库）")
@@ -188,7 +189,7 @@ def page_config():
                     min=0.50,
                     max=0.95,
                     step=0.05,
-                    value=float(os.environ.get("KB_CONFIDENCE_HIGH", "0.75")),
+                    value=CONFIDENCE_HIGH,
                 ).classes("w-64").props("label-always")
 
                 ui.separator()

@@ -2,16 +2,16 @@
 
 > 本文档管理功能路线图和设计决策。版本变更记录见 `CHANGELOG.md`，Bug 跟踪改用 GitHub Issues。
 
-最后更新: 2026-06-23 (v0.9.0 ✅ 开发完成 — 知识库综合管理重构全部落地)
+最后更新: 2026-06-23 (v0.9.0 ✅ → v1.0.0 🔧 正在开发 — 18 项缺口纳入计划)
 
 ---
 
 ## 当前状态
 
 - 当前版本：**v0.9.0 ✅ 开发完成**（知识库综合管理重构全部落地）
-- 正在开发：**v1.0.0**（守望文件夹 + YAML 配置化 + 一键打包）
+- 正在开发：**v1.0.0**（无 UI 管线：守望文件夹 + OCR 管道接入 + YAML 配置化 + 一键部署/打包）
 - 活跃 Bug：**0**
-- Git 状态：main 分支，v0.9.0 待提交
+- Git 状态：main 分支，B 清理已就绪待提交
 
 ---
 
@@ -194,6 +194,117 @@
 - ✅ 竞品标杆：RAGFlow（卡片式仪表盘）+ LLM Wiki（操作日志）+ Dify（管道可视化）
 
 ---
+
+### v1.0.0 🔧 无 UI 管线 + 一键部署（2026-06-23 开发中 — A1 ✅ A2 ✅ A3 ✅）
+
+### 目标
+
+把 Citrinitas 从「开发者工具」变成「任何人双击就能用」的一站式知识引擎。
+
+### 核心交付（A1-A5）
+
+| # | 任务 | 内容 | 文件 |
+|:-:|------|------|------|
+| **A1** ✅ | `install.ps1` 一键部署 | 检测 Python 3.11+、创建 venv、安装依赖、初始化 Qdrant 目录、复制 .env.example→.env | 新建 |
+| **A2** ✅ | 增强 `run.bat` | Qdrant/Ollama 健康检查 + 依赖完整性检测 + 守望守护进程启动 + 优雅关闭顺序 | run.bat |
+| **A3** ✅ | YAML 配置化 | 管道参数从代码移到 `pipe_cfg.yaml`（11 项），`config/settings.py` 加载器，`.env` 覆盖 YAML，P1-3 验证/P2-3 边界文档/P2-6 变更检测 | 新建 + 4 模块改造 |
+| **A4** | 守望文件夹 | `watch/` 目录自动监控摄入（watchdog），文件完整性检测，并发安全，死信队列 | 新建 + kb_query.py |
+| **A5** | OCR 接入管道 | 图片/扫描件→OCR 识字→正常走管道，PaddleOCR 预热，混合 PDF 支持 | kb_query.py + text_pipeline.py |
+
+### 缺口清单（四轮审查合并，去重后 42 项）
+
+> 2026-06-23 A2(链路追踪) + A3(防御纵深) + A4(交叉校验) + A5(集成/并发/恢复) 四轮审查完成。
+> 全部纳入 v1.0.0 执行范围。P2 远期待办可延后到 v1.1.0。
+
+#### 🔴 P0 — 阻断（13 项）
+
+| # | 归属 | 缺口 | 审查轮 |
+|---|:--:|------|:--:|
+| P0-01 | A2 | **Qdrant 启动后无健康检查** — 只 `timeout /t 3`，可能没启动完就开 Web UI | A1 |
+| P0-02 | A2 | **Ollama 完全无检查** — run.bat 不检查 Ollama 是否运行 | A1 |
+| P0-03 | A4 | **无 staging 目录** — 文件处理中仍留在 watch/，失败后被重复捡起，死循环 | A3 |
+| P0-04 | A4 | **ingest() 无顶层 try/except** — Python 异常会崩溃 watcher 线程，静默停止 | A4 |
+| P0-05 | A4 | **孤儿 staging 恢复缺失** — 崩溃后 staging 文件永远无人处理 | A5 |
+| P0-06 | A4 | **watcher 线程静默死亡** — daemon 崩溃无监控，UI 显示 enabled 实际已死 | A5 |
+| P0-07 | A4 | **基础设施故障无降级** — Ollama/Qdrant 挂了 → 所有文件打入 DLQ，恢复后需手动移回 | A3 |
+| P0-08 | A4 | **ingest() 无并发保护** — watcher + 手动上传同时调用 ingest()，嵌入超载 | A5 |
+| P0-09 | A4 | **install.ps1 目录名旧设计** — `watch\processed` / `watch\failed`，新设计用 `watch_staging` 等 | A5 |
+| P0-10 | A4 | **config/settings.py 零 watch 配置** — poll_interval / dlq_max 等无处可读 | A5 |
+| P0-11 | A4 | **hub.py DLQ 只读 JSON 格式** — 守望 DLQ 存原始文件 + .meta.json，Hub 看不到 | A4 |
+| P0-12 | A4 | **处理后原文件未定义** — 成功后留在 watch/ → 重启重复摄入 | A2 |
+| P0-13 | A4 | **临时文件未过滤** — Office ~$xxx.docx / .part / .crdownload 被 watchdog 捡到 | A2 |
+
+#### 🟡 P1 — 严重（19 项）
+
+| # | 归属 | 缺口 | 审查轮 |
+|---|:--:|------|:--:|
+| P1-01 | A4 | **DLQ 磁盘无保护** — watch_dead_letter/ 可能无限膨胀 | A2 |
+| P1-02 | A4 | **DLQ 同名文件覆盖** — 两次同名文件都失败，第二个覆盖第一个 | A2 |
+| P1-03 | A4 | **OCR 就绪检查缺失** — 守望捡到图片时 PaddleOCR 可能还没加载模型 | A2 |
+| P1-04 | A4 | **来源标记未区分** — metadata 缺少 ingestion_source: "watch" | A2 |
+| P1-05 | A4 | **文件锁无重试** — Word 打开的文件复制到 watch/ 直接 PermissionError | A3 |
+| P1-06 | A4 | **系统文件未过滤** — thumbs.db / desktop.ini 也会被捡到 | A3 |
+| P1-07 | A4 | **多实例检测缺失** — 两个 run.bat 同时跑 → 两个 watcher 抢同一文件 | A3 |
+| P1-08 | A4 | **磁盘满降级** — .meta.json 写入失败时静默，文件卡在 staging | A3 |
+| P1-09 | A4 | **FLOWCHART C3 编码失败路径不可达** — latin-1 兜底让整条分支作废 | A4 |
+| P1-10 | A4 | **run.bat 目录名不一致** — 第 162 行打印 watch\failed\，与设计不符 | A4 |
+| P1-11 | A4 | **LLM API 未纳入健康检查** — classify_document() 依赖 DeepSeek，挂了全入 DLQ | A4 |
+| P1-12 | A4 | **DLQ 操作按钮不兼容** — 手动修正/重新上传 只适配 JSON 格式 DLQ | A5 |
+| P1-13 | A4 | **activity_log 缺少 watch 专属 action** — 无法区分手动失败 vs 守望失败 | A5 |
+| P1-14 | A4 | **STATE dict 非线程安全** — watcher 线程写 STATE，NiceGUI 同时读 | A5 |
+| P1-15 | A4 | **写入完成检测 2 秒不靠谱** — 大文件/网络盘不够，小文件浪费 | A5 |
+| P1-16 | A4 | **无背压控制** — 一口气丢 50 个文件队列无限增长 | A5 |
+| P1-17 | A4 | **watcher+手动 并发 Ollama 超载** — 同时嵌入两份数据 | A5 |
+| P1-18 | A4 | **ingest_log 与 Qdrant 可能不一致** — _step_log_ingest 在 write_qdrant 之后 | A5 |
+| P1-19 | A4 | **磁盘满 .meta.json 写入静默失败** — activity_log 吞异常 | A5 |
+
+#### 🟢 P2 — 体验（10 项，可延至 v1.1.0）
+
+| # | 归属 | 缺口 | 审查轮 |
+|---|:--:|------|:--:|
+| P2-01 | A4 | DLQ 按日期分子目录 | A2 |
+| P2-02 | A4 | /hub 实时显示 DLQ 条目数量徽章 | A2 |
+| P2-03 | A4 | 大文件上限保护（默认 50MB） | A1 |
+| P2-04 | A4 | 处理超时保护（单文件 > 10 分钟入 DLQ） | A3 |
+| P2-05 | A4 | 原文件时间戳保留到 metadata | A3 |
+| P2-06 | A4 | DLQ 错误中文化（.meta.json 的 error 字段） | A3 |
+| P2-07 | A4 | ingestion_source 字段标准化（↓ P1-04 强制执行后自然解决） | A4 |
+| P2-08 | A4 | run.bat 步骤编号跳号修复（缺 [4/8]） | A4 |
+| P2-09 | A4 | FLOWCHART 版本日期过旧（v3 2026-06-17 → v5 2026-06-23） | A4 |
+| P2-10 | A4 | 可配置的文件扩展名白名单 | A2 |
+
+> ⚠️ A5（OCR 接入管道）未纳入本轮审查，其缺口（P0-6/P1-1/P2-5）独立处理。
+
+### 设计决策（2026-06-23 更新）
+
+| 决策点 | 结论 |
+|--------|------|
+| 守望文件夹启动 | run.bat 自动启动守护进程，用户无感知 |
+| 文件流目录 | watch/(投放) → staging/(处理中) → processed/(成功) / dead_letter/(失败) |
+| 并发安全 | threading.Lock 保护 ingest() + 串行队列消费（P0-08 修复） |
+| 文件完整性 | 每 500ms 轮询文件大小，连续 2 次不变 → 认为写入完成（P1-15 修复） |
+| 基础设施降级 | Qdrant/Ollama 不通 → watcher 暂停处理，每 30s 重试，不通不入 DLQ（P0-07） |
+| DLQ 格式 | 置信度 DLQ → JSON；守望 DLQ → 原始文件 + .meta.json（P0-11 Hub 统一展示） |
+| DLQ 清理 | 自动：>30 天删除；手动：Hub UI 逐条操作（P1-01 磁盘保护 500MB 上限） |
+| 孤儿恢复 | 启动时扫描 staging/ → 文件移回 watch/ 重新处理（P0-05） |
+| watcher 线程监控 | 30s 心跳检测，死了自动告警 + activity_log（P0-06） |
+| 优雅关闭顺序 | 守望守护进程 → Web UI → Qdrant → Ollama |
+| 关闭序列 | Ctrl+C 触发，超时 10 秒后强杀 |
+| 文档同步 | FLOWCHART.md 新增 F_WATCH + DL_WATCH 节点及连线（P2-09） |
+
+### 验收标准
+
+- [ ] `install.ps1` 双击后 5 分钟内完成全部安装 + 验证通过
+- [ ] `run.bat` 双击后自动启动 Qdrant + Ollama（如有）+ Web UI + 守望守护进程
+- [ ] 丢一个 .txt 到 `watch/`，30 秒内出现在知识库搜索结果里
+- [ ] 丢一张扫描页到 `watch/`，自动 OCR → 入库 → 可搜索
+- [ ] OCR 失败的文件出现在「死信队列」UI，不静默丢失
+- [ ] 修改 `pipe_cfg.yaml` 后重启服务，参数生效
+- [ ] 同时丢 5 个文件到 watch/，全部稳定入库，不丢数据
+
+---
+
+
 
 
 > 可追溯的设计决策记录，避免未来重蹈覆辙。

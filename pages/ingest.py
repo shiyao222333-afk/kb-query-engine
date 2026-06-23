@@ -206,9 +206,10 @@ def page_ingest():
                                 field_sources = {}
                                 overall_conf = 0.0
 
-                            # 2. 置信度阈值检查
-                            conf_low = float(os.environ.get("KB_CONFIDENCE_LOW", "0.40"))
-                            conf_high = float(os.environ.get("KB_CONFIDENCE_HIGH", "0.75"))
+                            # 2. 置信度阈值检查（从 pipe_cfg.yaml 读取）
+                            from config.settings import CONFIDENCE_LOW, CONFIDENCE_HIGH
+                            conf_low = CONFIDENCE_LOW
+                            conf_high = CONFIDENCE_HIGH
 
                             if overall_conf < conf_low:
                                 # 死信
@@ -397,9 +398,9 @@ def page_ingest():
                 overall_conf = 0.0
                 ui.notify("⚠️ 未执行 AI 分析，将使用当前值直接摄入", type="warning")
 
-            # 置信度路由（三档，阈值从 .env 读取）
-            _conf_low = float(os.environ.get("KB_CONFIDENCE_LOW", "0.40"))
-            _conf_high = float(os.environ.get("KB_CONFIDENCE_HIGH", "0.75"))
+            # 置信度路由（三档，阈值从 pipe_cfg.yaml 读取）
+            _conf_low = CONFIDENCE_LOW
+            _conf_high = CONFIDENCE_HIGH
             if overall_conf >= _conf_high:
                 needs_review = False
                 dlq = False

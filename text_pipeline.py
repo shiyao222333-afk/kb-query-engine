@@ -18,7 +18,7 @@ import requests
 from docx import Document
 from bs4 import BeautifulSoup
 
-from qconst import PROJECT_DIR, IMAGES_DIR, EMBED_MODEL, OLLAMA_URL
+from qconst import PROJECT_DIR, IMAGES_DIR, EMBED_MODEL, OLLAMA_URL, CHUNK_MAX_CHARS, CHUNK_OVERLAP
 
 logger = logging.getLogger(__name__)
 
@@ -804,11 +804,15 @@ def _split_long_paragraph(text: str, max_chars: int, overlap: int) -> list[str]:
     return chunks
 
 
-def _chunk_text(text: str, max_chars: int = 800, overlap: int = 60) -> list[str]:
+def _chunk_text(text: str, max_chars: int = None, overlap: int = None) -> list[str]:
     """
     将文本切分为重叠的块。
     保护原子结构（公式/表格/图片引用）不被截断。
     """
+    if max_chars is None:
+        max_chars = CHUNK_MAX_CHARS
+    if overlap is None:
+        overlap = CHUNK_OVERLAP
     # ── 第1步：保护原子块（替换为占位符）──
     placeholders = {}
     counter = [0]

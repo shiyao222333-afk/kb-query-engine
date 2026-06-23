@@ -22,6 +22,7 @@ from utils.activity_log import log_activity, read_recent_activities
 
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DLQ_DIR = os.path.join(PROJECT_DIR, "local_data", "dead_letter")
+WATCH_DLQ_DIR = os.path.join(PROJECT_DIR, "data", "watch_dead_letter")
 
 
 def _load_dlq_files() -> list:
@@ -45,6 +46,53 @@ def _delete_dlq_file(fp: str):
     """删除单个死信文件。"""
     if os.path.exists(fp):
         os.unlink(fp)
+
+
+def _load_watch_dlq_files() -> list:
+    """加载守望文件夹死信（原始文件 + .meta.json）。"""
+    items = []
+    if not os.path.isdir(WATCH_DLQ_DIR):
+        return items
+    for filename in sorted(os.listdir(WATCH_DLQ_DIR), reverse=True):
+        fp = os.path.join(WATCH_DLQ_DIR, filename)
+        if not os.path.isfile(fp) or filename.endswith(".meta.json"):
+            continue
+        meta_path = fp + ".meta.json"
+        meta = {}
+        if os.path.isfile(meta_path):
+            try:
+                with open(meta_path, "r", encoding="utf-8") as f:
+                    meta = json.load(f)
+            except Exception:
+                pass
+        items.append({
+            "_file": fp,
+            "_meta_file": meta_path,
+            "_filename": filename,
+            "_source": "watch",
+            "error": meta.get("error", "未知错误"),
+            "step": meta.get("failed_step", "unknown"),
+            "failed_at": meta.get("failed_at", ""),
+            "retry_count": meta.get("retry_count", 0),
+        })
+    return items
+
+
+def _move_to_watch(fp: str) -> bool:
+    """将守望 DLQ 文件移回 watch/ 目录以重新处理。"""
+    import shutil
+    watch_dir = os.path.join(PROJECT_DIR, "data", "watch")
+    os.makedirs(watch_dir, exist_ok=True)
+    dst = os.path.join(watch_dir, os.path.basename(fp))
+    try:
+        shutil.move(fp, dst)
+        # 删除 .meta.json
+        meta_fp = fp + ".meta.json"
+        if os.path.exists(meta_fp):
+            os.unlink(meta_fp)
+        return True
+    except Exception:
+        return False
 
 
 @ui.page("/hub")
@@ -110,7 +158,7 @@ def _build_overview_tab():
 
     # 获取实时统计数据
     total_docs = stats.get("points", 0)
-    dlq_count = len(_load_dlq_files())
+    dlq_count = len(_load_dlq_files()) + len(_load_watch_dlq_files())
 
     review_count = 0
     try:
@@ -674,21 +722,25 @@ def _build_review_card(doc: dict, on_refresh):
 def _build_dlq_tab():
     """死信队列标签页 — 列出置信度 < 低阈值的条目，支持修正/上传/删除。"""
     ui.markdown("### 🗑️ 死信队列")
-    ui.markdown("*AI 完全无法分类的内容，需要手动处理。*")
+    ui.markdown("*AI 无法分类或处理失败的内容，需要手动处理。*")
 
     dlq_container = ui.column().classes("w-full")
 
     def _refresh_dlq():
         dlq_container.clear()
         with dlq_container:
-            items = _load_dlq_files()
-            if not items:
+            json_items = _load_dlq_files()
+            watch_items = _load_watch_dlq_files()
+            total = len(json_items) + len(watch_items)
+
+            if total == 0:
                 ui.badge("🎉 死信队列为空", color="green")
                 return
 
-            ui.label(f"共 {len(items)} 条死信").classes("text-sm text-gray-500 mb-2")
+            ui.label(f"共 {total} 条死信（置信度过低: {len(json_items)} / 处理失败: {len(watch_items)}）").classes("text-sm text-gray-500 mb-2")
 
-            for item in items:
+            # ── 置信度过低 DLQ（JSON 格式）──
+            for item in json_items:
                 confidence = item.get("confidence", 0)
                 reason = item.get("reason", "未知")
                 content = item.get("content", "")[:200]
@@ -704,6 +756,7 @@ def _build_dlq_tab():
                     with ui.row().classes("w-full items-center gap-4"):
                         ui.label(f"📄 {fname}").classes("font-bold flex-1")
                         ui.badge(f"置信度: {confidence:.0%}", color="red")
+                        ui.badge("AI 不确定", color="orange")
 
                     ui.label(f"原因: {reason} | 时间: {ingested_at}").classes("text-xs text-gray-400")
                     ui.label(f"类型: {content_type} | 领域: {domain_str}").classes("text-xs text-gray-400")
@@ -712,19 +765,14 @@ def _build_dlq_tab():
                         ui.label(content).classes("text-xs text-gray-500 mt-1").style("white-space: pre-wrap")
 
                     with ui.row().classes("gap-2 mt-2"):
-                        # 方式一：手动修正
                         async def _open_edit_dialog(item=item):
                             _show_dlq_edit_dialog(item, _refresh_dlq)
-
                         ui.button("✏️ 手动修正", on_click=_open_edit_dialog).props("color=blue flat")
 
-                        # 方式二：重新上传文件
                         async def _open_upload_dialog(item=item):
                             _show_dlq_upload_dialog(item, _refresh_dlq)
-
                         ui.button("📎 重新上传", on_click=_open_upload_dialog).props("color=teal flat")
 
-                        # 方式三：永久删除
                         del_dialog = ui.dialog()
                         with del_dialog:
                             with ui.card().classes("p-4"):
@@ -739,7 +787,58 @@ def _build_dlq_tab():
                                         ui.notify(f"已删除: {os.path.basename(f)}", type="positive"),
                                         _refresh_dlq(),
                                     ]).props("color=red")
+                        ui.button("❌ 删除", on_click=del_dialog.open).props("color=red flat")
 
+            # ── 守望文件夹 DLQ（原始文件 + .meta.json）──
+            for item in watch_items:
+                fp = item["_file"]
+                fname = item["_filename"]
+                error = item.get("error", "未知错误")
+                step = item.get("step", "unknown")
+                failed_at = item.get("failed_at", "")[:19]
+
+                step_names = {
+                    "format_check": "格式检查", "size_check": "大小检查",
+                    "extract": "文本提取", "extract_empty": "文本为空",
+                    "classify": "AI 分类", "ingest": "知识入库",
+                    "timeout": "处理超时",
+                }
+                step_cn = step_names.get(step, step)
+
+                with ui.card().classes("w-full"):
+                    with ui.row().classes("w-full items-center gap-4"):
+                        ui.label(f"📁 {fname}").classes("font-bold flex-1")
+                        ui.badge(f"步骤: {step_cn}", color="red")
+                        ui.badge("守望文件夹", color="purple")
+
+                    ui.label(f"失败原因: {error}").classes("text-xs text-gray-500")
+                    ui.label(f"时间: {failed_at}").classes("text-xs text-gray-400")
+
+                    with ui.row().classes("gap-2 mt-2"):
+                        async def _retry_watch(f=fp):
+                            if _move_to_watch(f):
+                                ui.notify(f"✅ 已移回 watch/，将自动重试", type="positive")
+                            else:
+                                ui.notify(f"❌ 移动失败，请手动操作", type="negative")
+                            _refresh_dlq()
+                        ui.button("📥 移回重试", on_click=_retry_watch).props("color=blue flat")
+
+                        del_dialog = ui.dialog()
+                        with del_dialog:
+                            with ui.card().classes("p-4"):
+                                ui.label("⚠️ 确认永久删除？").classes("text-lg font-bold")
+                                ui.label(f"文件: {fname}").classes("text-sm text-gray-500")
+                                ui.label("原文件 + 失败记录将被删除。").classes("text-xs text-gray-400")
+                                with ui.row().classes("gap-2 mt-4"):
+                                    ui.button("取消", on_click=del_dialog.close).props("flat")
+                                    ui.button("确认删除", on_click=lambda f=fp, dd=del_dialog: [
+                                        os.path.exists(f) and os.unlink(f),
+                                        os.path.exists(f + ".meta.json") and os.unlink(f + ".meta.json"),
+                                        log_activity("dlq_delete", "", os.path.basename(f)),
+                                        dd.close(),
+                                        ui.notify(f"已删除: {os.path.basename(f)}", type="positive"),
+                                        _refresh_dlq(),
+                                    ]).props("color=red")
                         ui.button("❌ 删除", on_click=del_dialog.open).props("color=red flat")
 
     _refresh_dlq()
