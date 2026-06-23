@@ -1558,13 +1558,10 @@ def _check_lock_file() -> bool:
         except OSError:
             pass
         return True
+    # 跨平台检查进程是否存在（替代 ctypes.windll）
     try:
-        import ctypes
-        PROCESS_QUERY_INFORMATION = 0x0400
-        handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_INFORMATION, False, pid)
-        if handle:
-            ctypes.windll.kernel32.CloseHandle(handle)
-            return False
+        os.kill(pid, 0)  # 发送信号 0（只检查进程是否存在，跨平台）
+        return False  # 进程存在，已有实例运行
     except OSError:
         pass
     try:
