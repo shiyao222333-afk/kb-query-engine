@@ -1,6 +1,7 @@
 # ═══════════════════════════════════════════
-# Athanor · 熔知 / MindForge
-# Python 依赖清单（v0.4.5 NiceGUI 版）
+# Citrinitas · 熔知
+# Python 依赖清单
+# 精确安装用 requirements.lock，此文件为概览
 # ═══════════════════════════════════════════
 
 # ── Web 框架 ──
@@ -10,14 +11,20 @@ uvicorn>=0.29.0
 
 # ── 向量数据库 ──
 qdrant-client>=1.7.0
+grpcio>=1.50.0
 
 # ── LLM API ──
 openai>=1.0.0
 
+# ── 嵌入模型（本地）──
+huggingface_hub>=1.0.0
+
 # ── HTTP / 工具 ──
 requests>=2.31.0
+PyYAML>=6.0
+python-dotenv>=1.0.0
 
-# ── 多格式文件处理（v0.4.5）──
+# ── 多格式文件处理 ──
 chardet>=5.0.0
 beautifulsoup4>=4.12.0
 pypdf>=5.0.0
@@ -30,6 +37,9 @@ lxml>=5.0.0
 fpdf2>=2.7.0
 pillow>=10.0.0
 
-# ── OCR（可选，按需安装）──
-# paddlepaddle>=2.6.0
-# paddleocr>=2.7.0
+# ── 中文分词 ──
+jieba>=0.42
+
+# ── OCR ──
+paddlepaddle>=2.6.0
+paddleocr>=2.7.0

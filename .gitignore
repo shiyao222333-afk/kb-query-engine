@@ -1,9 +1,14 @@
-# PrivateGPT 知识库引擎
+# Citrinitas 知识库引擎
 # ============
 
-# 本地数据（图片、索引、报告）
+# Python 虚拟环境
+venv/
+
+# 本地数据（图片、索引、报告、死信）
 local_data/
 qdrant_data/
+snapshots/
+storage/
 
 # Python
 __pycache__/
@@ -31,6 +36,9 @@ katex_out_*.json
 
 # OCR 临时文件
 *_ocr_tmp.txt
+
+# Qdrant 哨兵文件
+NUL
 
 # WorkBuddy 内部目录
 .workbuddy/
