@@ -198,6 +198,15 @@ def search(
         }
         if qdrant_filter:
             query_body["filter"] = qdrant_filter
+            # S1.5: ACORN — 提升严格过滤条件下的召回率
+            # enable=true 时，当过滤器选择性低于 max_selectivity，Qdrant 自动启用 ACORN
+            # max_selectivity=0.4 是官方推荐默认值（在准确性和性能间平衡）
+            query_body["params"] = {
+                "acorn": {
+                    "enable": True,
+                    "max_selectivity": 0.4,
+                }
+            }
 
         # 使用 Qdrant Query API（v1.10+ 原生混合查询）
         resp = requests.post(

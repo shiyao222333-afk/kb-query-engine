@@ -55,6 +55,7 @@ def page_config():
         with tabs:
             llm_tab = ui.tab("🤖 LLM")
             embed_tab = ui.tab("🧬 嵌入模型")
+            rerank_tab = ui.tab("🔀 重排序")
             sys_tab = ui.tab("⚙️ 系统")
         panels = ui.tab_panels(tabs, value=llm_tab).classes("w-full")
 
@@ -129,6 +130,45 @@ def page_config():
                         ui.notify("✅ 嵌入模型已保存", type="positive")
 
                 ui.button("💾 保存", on_click=save_embed).props("color=blue")
+
+            # ── 重排序 ──
+            with ui.tab_panel(rerank_tab):
+                ui.markdown("### 搜索结果重排序")
+                ui.markdown("*搜索后用嵌入模型对结果重新打分，提高精度。*")
+
+                rerank_enabled = ui.switch(
+                    "启用重排序",
+                    value=os.environ.get("KB_RERANK_ENABLED", "true").lower() == "true",
+                )
+
+                rerank_model = ui.input(
+                    label="重排序模型",
+                    value=os.environ.get("KB_RERANK_MODEL", "qwen3-embedding:4b"),
+                ).classes("w-full")
+
+                rerank_top_n = ui.number(
+                    label="取前 N 条结果重排序",
+                    value=int(os.environ.get("KB_RERANK_TOP_N", "20")),
+                    min=5,
+                    max=50,
+                    step=5,
+                ).classes("w-32")
+
+                ui.markdown("*重排序取搜索结果的前 N 条，用嵌入模型计算查询与文档的相似度，重新排序后返回。*")
+                ui.markdown("*关闭后使用 Qdrant 原始排序（RRF 融合分数）。*")
+
+                def save_rerank():
+                    _save_env({
+                        "KB_RERANK_ENABLED": "true" if rerank_enabled.value else "false",
+                        "KB_RERANK_MODEL": rerank_model.value or "qwen3-embedding:4b",
+                        "KB_RERANK_TOP_N": str(int(rerank_top_n.value or 20)),
+                    })
+                    os.environ["KB_RERANK_ENABLED"] = "true" if rerank_enabled.value else "false"
+                    os.environ["KB_RERANK_MODEL"] = rerank_model.value or "qwen3-embedding:4b"
+                    os.environ["KB_RERANK_TOP_N"] = str(int(rerank_top_n.value or 20))
+                    ui.notify("✅ 重排序配置已保存", type="positive")
+
+                ui.button("💾 保存重排序配置", on_click=save_rerank).props("color=blue")
 
             # ── 系统配置 ──
             with ui.tab_panel(sys_tab):
