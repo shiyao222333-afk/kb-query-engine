@@ -21,7 +21,7 @@ from utils.ui_shared import (
     set_active_collection, EMBED_PRESETS, _status_tick, set_main_loop,
 )
 import kb_query
-import watcher
+import watcher_v2
 
 from pages.ingest import page_ingest
 from pages.search import page_search
@@ -54,23 +54,23 @@ def startup():
     print("[启动] startup 回调开始（事件循环线程）", flush=True)
     set_main_loop()
     threading.Thread(target=_auto_shutdown, daemon=True).start()
-    # 启动守望文件夹
+    # 启动守望文件夹 v2
     try:
-        watcher.start_watcher()
-        print("[启动] 守望文件夹已启动", flush=True)
+        watcher_v2.start_watcher_v2()
+        print("[启动] 守望文件夹 v2 已启动", flush=True)
     except Exception as e:
-        print(f"[启动] ⚠️ 守望文件夹启动失败: {e}", flush=True)
+        print(f"[启动] ⚠️ 守望文件夹 v2 启动失败: {e}", flush=True)
     print(f"[启动] startup 回调完成 — STATE 已有 stats={STATE.get('stats')}", flush=True)
 
 
 @app.on_shutdown
 def shutdown():
     """关闭回调：停止守望文件夹。"""
-    print("[关闭] 停止守望文件夹…", flush=True)
+    print("[关闭] 停止守望文件夹 v2…", flush=True)
     try:
-        watcher.stop_watcher()
+        watcher_v2.stop_watcher_v2()
     except Exception as e:
-        print(f"[关闭] 守望文件夹停止异常: {e}", flush=True)
+        print(f"[关闭] 守望文件夹 v2 停止异常: {e}", flush=True)
 
 def _auto_shutdown():
     CHECK = 3
@@ -99,9 +99,9 @@ def _health_check():
         "qdrant_online": STATE["qdrant_online"],
         "stats": STATE.get("stats"),
         "pid": os.getpid(),
-        "watcher": {
-            "alive": watcher.is_watcher_alive(),
-            "stats": watcher.get_watch_stats(),
+        "watcher_v2": {
+            "alive": watcher_v2.is_watcher_v2_alive(),
+            "stats": watcher_v2.get_watch_v2_stats(),
         },
     })
 

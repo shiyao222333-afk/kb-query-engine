@@ -237,6 +237,80 @@ WATCH_TEMP_PATTERNS = _get_temp_patterns()
 # 启动时打印配置摘要
 # ═══════════════════════════════════════════════════════════════
 
+# ── 守望文件夹 v2（统一收件箱 + 状态追踪）──
+WATCH_V2_INBOX_DIR = _yaml_or_env(
+    "watch_v2.inbox_dir", "KB_WATCH_V2_INBOX_DIR", "data/inbox",
+)
+WATCH_V2_STATE_FILE = _yaml_or_env(
+    "watch_v2.state_file", "KB_WATCH_V2_STATE_FILE", "data/file_state.jsonl",
+)
+WATCH_V2_POLL_INTERVAL = _yaml_or_env(
+    "watch_v2.poll_interval", "KB_WATCH_V2_POLL_INTERVAL", 1.0, cast=float,
+    validator=lambda v: None if v > 0 else "must be > 0",
+)
+WATCH_V2_WRITE_COMPLETE_CHECKS = _yaml_or_env(
+    "watch_v2.write_complete_checks", "KB_WATCH_V2_WRITE_COMPLETE_CHECKS", 2, cast=int,
+    validator=lambda v: None if v >= 1 else "must be >= 1",
+)
+WATCH_V2_WRITE_CHECK_INTERVAL = _yaml_or_env(
+    "watch_v2.write_check_interval", "KB_WATCH_V2_WRITE_CHECK_INTERVAL", 0.5, cast=float,
+    validator=lambda v: None if v > 0 else "must be > 0",
+)
+WATCH_V2_MAX_FILE_SIZE_MB = _yaml_or_env(
+    "watch_v2.max_file_size_mb", "KB_WATCH_V2_MAX_FILE_SIZE_MB", 50, cast=int,
+    validator=lambda v: None if v >= 0 else "must be >= 0",
+)
+WATCH_V2_PROCESSING_TIMEOUT = _yaml_or_env(
+    "watch_v2.processing_timeout", "KB_WATCH_V2_PROCESSING_TIMEOUT", 600, cast=int,
+    validator=lambda v: None if v >= 10 else "must be >= 10",
+)
+WATCH_V2_QUEUE_MAX_SIZE = _yaml_or_env(
+    "watch_v2.queue_max_size", "KB_WATCH_V2_QUEUE_MAX_SIZE", 100, cast=int,
+    validator=lambda v: None if v >= 1 else "must be >= 1",
+)
+# 保留策略
+WATCH_V2_KEEP_FILE = _yaml_or_env(
+    "watch_v2.retention.keep_file", "KB_WATCH_V2_KEEP_FILE", "data/inbox",
+)
+WATCH_V2_TEXT_DENSITY_THRESHOLD = _yaml_or_env(
+    "watch_v2.retention.text_density_threshold", "KB_WATCH_V2_TEXT_DENSITY_THRESHOLD", 0.3, cast=float,
+    validator=lambda v: None if 0 <= v <= 1 else "must be 0-1",
+)
+WATCH_V2_OCR_CONF_THRESHOLD = _yaml_or_env(
+    "watch_v2.retention.ocr_conf_threshold", "KB_WATCH_V2_OCR_CONF_THRESHOLD", 0.7, cast=float,
+    validator=lambda v: None if 0 <= v <= 1 else "must be 0-1",
+)
+# 故障处理
+WATCH_V2_MAX_AUTO_RETRIES = _yaml_or_env(
+    "watch_v2.failure_strategies.max_auto_retries", "KB_WATCH_V2_MAX_AUTO_RETRIES", 3, cast=int,
+    validator=lambda v: None if v >= 0 else "must be >= 0",
+)
+WATCH_V2_AUTO_RETRY_DELAY = _yaml_or_env(
+    "watch_v2.failure_strategies.auto_retry_delay", "KB_WATCH_V2_AUTO_RETRY_DELAY", 5, cast=int,
+    validator=lambda v: None if v >= 1 else "must be >= 1",
+)
+WATCH_V2_INFRA_RETRY_INTERVAL = _yaml_or_env(
+    "watch_v2.failure_strategies.infra_retry_interval", "KB_WATCH_V2_INFRA_RETRY_INTERVAL", 30, cast=int,
+    validator=lambda v: None if v >= 5 else "must be >= 5",
+)
+WATCH_V2_DLQ_TTL_DAYS = _yaml_or_env(
+    "watch_v2.failure_strategies.dlq_ttl_days", "KB_WATCH_V2_DLQ_TTL_DAYS", 30, cast=int,
+    validator=lambda v: None if v >= 0 else "must be >= 0",
+)
+WATCH_V2_NOTIFY_ON_FATAL = _yaml_or_env(
+    "watch_v2.failure_strategies.notify_on_fatal", "KB_WATCH_V2_NOTIFY_ON_FATAL", True, cast=bool,
+)
+
+
+def _get_v2_temp_patterns():
+    patterns = _cfg.get("watch_v2", {}).get("temp_patterns", [])
+    if not patterns or not isinstance(patterns, list):
+        return ["~$*", "*.tmp", "*.part", "*.crdownload", "thumbs.db", "desktop.ini"]
+    return [str(p) for p in patterns]
+
+WATCH_V2_TEMP_PATTERNS = _get_v2_temp_patterns()
+
+
 def _print_summary():
     """打印关键配置值（不包含密钥）。"""
     print("[settings] Pipeline configuration loaded:")
@@ -256,3 +330,6 @@ def _print_summary():
     print(f"  watch.max_file_size_mb  = {WATCH_MAX_FILE_SIZE_MB}")
     print(f"  watch.dlq_ttl_days      = {WATCH_DLQ_TTL_DAYS}")
     print(f"  watch.queue_max_size    = {WATCH_QUEUE_MAX_SIZE}")
+    print(f"  watch_v2.inbox_dir      = {WATCH_V2_INBOX_DIR}")
+    print(f"  watch_v2.state_file     = {WATCH_V2_STATE_FILE}")
+    print(f"  watch_v2.max_retries    = {WATCH_V2_MAX_AUTO_RETRIES}")

@@ -5,6 +5,7 @@ Citrinitas · 熔知 — 知识库管理页面
 从 main.py 拆分出来以降低主文件复杂度。
 
 v0.9.0: 侧边栏 5→4 合并，/hub 承接原 /manage 功能，4 标签：概览/浏览/待审核/死信
+v1.0.0: 守望 v2 — 新增收件箱标签页，死信标签页仅保留置信度 DLQ
 """
 
 import asyncio
@@ -22,7 +23,8 @@ from utils.activity_log import log_activity, read_recent_activities
 
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DLQ_DIR = os.path.join(PROJECT_DIR, "local_data", "dead_letter")
-WATCH_DLQ_DIR = os.path.join(PROJECT_DIR, "data", "watch_dead_letter")
+INBOX_DIR = os.path.join(PROJECT_DIR, "data", "inbox")
+STATE_FILE = os.path.join(PROJECT_DIR, "data", "file_state.jsonl")
 
 
 def _load_dlq_files() -> list:
@@ -49,50 +51,155 @@ def _delete_dlq_file(fp: str):
 
 
 def _load_watch_dlq_files() -> list:
-    """加载守望文件夹死信（原始文件 + .meta.json）。"""
-    items = []
-    if not os.path.isdir(WATCH_DLQ_DIR):
-        return items
-    for filename in sorted(os.listdir(WATCH_DLQ_DIR), reverse=True):
-        fp = os.path.join(WATCH_DLQ_DIR, filename)
-        if not os.path.isfile(fp) or filename.endswith(".meta.json"):
-            continue
-        meta_path = fp + ".meta.json"
-        meta = {}
-        if os.path.isfile(meta_path):
-            try:
-                with open(meta_path, "r", encoding="utf-8") as f:
-                    meta = json.load(f)
-            except Exception:
-                pass
-        items.append({
-            "_file": fp,
-            "_meta_file": meta_path,
-            "_filename": filename,
-            "_source": "watch",
-            "error": meta.get("error", "未知错误"),
-            "step": meta.get("failed_step", "unknown"),
-            "failed_at": meta.get("failed_at", ""),
-            "retry_count": meta.get("retry_count", 0),
-        })
-    return items
+    """【v1.0.0 废弃】旧版守望 DLQ 已迁移到统一收件箱，此函数返回空列表以保持兼容。"""
+    return []
 
 
 def _move_to_watch(fp: str) -> bool:
-    """将守望 DLQ 文件移回 watch/ 目录以重新处理。"""
+    """【v1.0.0 废弃】改用 retry_file_v2() 从收件箱重试。"""
     import shutil
-    watch_dir = os.path.join(PROJECT_DIR, "data", "watch")
-    os.makedirs(watch_dir, exist_ok=True)
-    dst = os.path.join(watch_dir, os.path.basename(fp))
+    # 尝试移回收件箱
+    if os.path.isfile(fp):
+        dst = os.path.join(INBOX_DIR, os.path.basename(fp))
+        try:
+            _ensure_inbox_dir()
+            shutil.move(fp, dst)
+            return True
+        except Exception:
+            pass
+    return False
+
+
+# ═══════════════════════════════════════════
+# v1.0.0: 统一收件箱函数
+# ═══════════════════════════════════════════
+
+def _ensure_inbox_dir():
+    """确保收件箱目录存在。"""
+    os.makedirs(INBOX_DIR, exist_ok=True)
+
+
+def _load_inbox_files() -> list:
+    """加载统一收件箱文件列表（含状态）。"""
+    items = []
+
+    # 加载 file_state.jsonl
+    states = {}
+    if os.path.isfile(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                        fname = entry.get("file", "")
+                        if fname:
+                            states[fname] = entry
+                    except json.JSONDecodeError:
+                        pass
+        except Exception:
+            pass
+
+    # 扫描 inbox 目录
+    if not os.path.isdir(INBOX_DIR):
+        return items
+
+    for filename in sorted(os.listdir(INBOX_DIR), reverse=True):
+        fp = os.path.join(INBOX_DIR, filename)
+        if not os.path.isfile(fp):
+            continue
+        # 跳过临时文件
+        if filename.lower().startswith("~$") or filename.lower().endswith(".tmp"):
+            continue
+        if filename in (".gitkeep", "thumbs.db", "desktop.ini"):
+            continue
+
+        state_entry = states.get(filename, {})
+        state = state_entry.get("state", "pending")
+
+        items.append({
+            "_file": fp,
+            "_filename": filename,
+            "state": state,
+            "error": state_entry.get("error", ""),
+            "step": state_entry.get("step", ""),
+            "failure_type": state_entry.get("failure_type", ""),
+            "retry_count": state_entry.get("retry_count", 0),
+            "confidence": state_entry.get("confidence"),
+            "ts": state_entry.get("ts", ""),
+        })
+
+    return items
+
+
+def _retry_inbox_file(filename: str) -> bool:
+    """手动重试收件箱中的文件。"""
     try:
-        shutil.move(fp, dst)
-        # 删除 .meta.json
-        meta_fp = fp + ".meta.json"
-        if os.path.exists(meta_fp):
-            os.unlink(meta_fp)
-        return True
+        from watcher_v2 import retry_file_v2
+        result = retry_file_v2(filename)
+        if result:
+            log_activity("inbox_retry", "", filename)
+        return result
     except Exception:
         return False
+
+
+def _delete_inbox_file(filename: str) -> bool:
+    """删除收件箱中的文件及其状态记录。"""
+    fp = os.path.join(INBOX_DIR, filename)
+    deleted = False
+
+    # 删除文件
+    if os.path.isfile(fp):
+        try:
+            os.unlink(fp)
+            deleted = True
+        except OSError:
+            return False
+
+    # 删除状态记录（重写 file_state.jsonl）
+    if os.path.isfile(STATE_FILE):
+        try:
+            lines = []
+            with open(STATE_FILE, "r", encoding="utf-8") as f:
+                for line in f:
+                    line_stripped = line.strip()
+                    if not line_stripped:
+                        continue
+                    try:
+                        entry = json.loads(line_stripped)
+                        if entry.get("file", "") != filename:
+                            lines.append(line_stripped)
+                    except json.JSONDecodeError:
+                        lines.append(line_stripped)
+            with open(STATE_FILE, "w", encoding="utf-8") as f:
+                for line in lines:
+                    f.write(line + "\n")
+        except Exception:
+            pass
+
+    if deleted:
+        log_activity("inbox_delete", "", filename)
+    return deleted
+
+
+def _get_inbox_stats() -> dict:
+    """获取收件箱统计。"""
+    items = _load_inbox_files()
+    stats = {"total": len(items), "pending": 0, "failed": 0, "needs_review": 0, "retry": 0}
+    for item in items:
+        s = item.get("state", "pending")
+        if s == "pending":
+            stats["pending"] += 1
+        elif s == "failed":
+            stats["failed"] += 1
+        elif s == "needs_review":
+            stats["needs_review"] += 1
+        elif s == "retry":
+            stats["retry"] += 1
+    return stats
 
 
 @ui.page("/hub")
@@ -114,6 +221,7 @@ def page_hub():
             overview_tab = ui.tab("📊 概览")
             browse_tab = ui.tab("📋 浏览")
             review_tab = ui.tab("⚠️ 待审核")
+            inbox_tab = ui.tab("📥 收件箱")
             dlq_tab = ui.tab("🗑️ 死信")
         tab_panels = ui.tab_panels(tabs, value=overview_tab).classes("w-full")
 
@@ -139,7 +247,14 @@ def page_hub():
                 _build_review_tab()
 
         # ══════════════════════════════════════
-        # Tab 4: 死信
+        # Tab 4: 收件箱（v1.0.0 新增 — 统一收件箱）
+        # ══════════════════════════════════════
+        with tab_panels:
+            with ui.tab_panel(inbox_tab):
+                _build_inbox_tab()
+
+        # ══════════════════════════════════════
+        # Tab 5: 死信
         # ══════════════════════════════════════
         with tab_panels:
             with ui.tab_panel(dlq_tab):
@@ -158,7 +273,8 @@ def _build_overview_tab():
 
     # 获取实时统计数据
     total_docs = stats.get("points", 0)
-    dlq_count = len(_load_dlq_files()) + len(_load_watch_dlq_files())
+    dlq_count = len(_load_dlq_files())
+    inbox_stats = _get_inbox_stats()
 
     review_count = 0
     try:
@@ -169,7 +285,7 @@ def _build_overview_tab():
         pass
 
     # ═══════════════════════════════
-    # Row 1: 统计卡片（4 列）
+    # Row 1: 统计卡片（5 列）
     # ═══════════════════════════════
     with ui.row().classes("w-full gap-4"):
         with ui.card().classes("flex-1 text-center p-4"):
@@ -183,8 +299,19 @@ def _build_overview_tab():
             ui.label("待审核").classes("text-sm text-gray-400")
 
         with ui.card().classes("flex-1 text-center p-4"):
+            ui.label("📥").classes("text-3xl")
+            inbox_total = inbox_stats["total"]
+            inbox_color = "text-red-400" if inbox_stats["failed"] > 0 else "text-blue-400"
+            ui.label(str(inbox_total)).classes(f"text-2xl font-bold {inbox_color}")
+            ui.label("收件箱").classes("text-sm text-gray-400")
+            if inbox_stats["pending"] > 0:
+                ui.badge(f"{inbox_stats['pending']} 待处理", color="blue").classes("text-xs mt-1")
+            if inbox_stats["failed"] > 0:
+                ui.badge(f"{inbox_stats['failed']} 失败", color="red").classes("text-xs mt-1")
+
+        with ui.card().classes("flex-1 text-center p-4"):
             ui.label("🗑️").classes("text-3xl")
-            ui.label(str(dlq_count)).classes("text-2xl font-bold text-red-400")
+            ui.label(str(dlq_count)).classes("text-2xl font-bold text-red-400" if dlq_count > 0 else "text-2xl font-bold")
             ui.label("死信").classes("text-sm text-gray-400")
 
         with ui.card().classes("flex-1 text-center p-4"):
@@ -719,10 +846,167 @@ def _build_review_card(doc: dict, on_refresh):
             ui.button("❌ 丢弃", on_click=drop_dialog.open).props("color=red flat")
 
 
+def _build_inbox_tab():
+    """收件箱标签页（v1.0.0） — 统一收件箱文件列表 + 状态追踪 + 手动操作。"""
+    ui.markdown("### 📥 统一收件箱")
+    ui.markdown("*所有通过守望文件夹进入的文件都在这里。状态由 `file_state.jsonl` 追踪。*")
+
+    inbox_container = ui.column().classes("w-full")
+
+    def _refresh_inbox():
+        inbox_container.clear()
+        with inbox_container:
+            items = _load_inbox_files()
+
+            if not items:
+                ui.badge("📭 收件箱为空 — 将文件放入 data/inbox/ 目录即可自动处理", color="grey").classes("text-lg")
+                ui.label(f"监控目录: {INBOX_DIR}").classes("text-xs text-gray-500 mt-2")
+                return
+
+            # 统计条
+            stats = {"pending": 0, "failed": 0, "needs_review": 0, "retry": 0, "processing": 0}
+            for item in items:
+                s = item.get("state", "pending")
+                stats[s] = stats.get(s, 0) + 1
+
+            stat_parts = []
+            if stats["pending"]:
+                stat_parts.append(f"⏳ 待处理: {stats['pending']}")
+            if stats["failed"]:
+                stat_parts.append(f"❌ 失败: {stats['failed']}")
+            if stats["needs_review"]:
+                stat_parts.append(f"⚠️ 需审核: {stats['needs_review']}")
+            if stats["retry"]:
+                stat_parts.append(f"🔄 等待重试: {stats['retry']}")
+            ui.label(f"共 {len(items)} 个文件 — " + " | ".join(stat_parts)).classes("text-sm text-gray-500 mb-2")
+
+            # 状态筛选按钮
+            filter_state = {"value": "all"}
+
+            def _set_filter(s):
+                filter_state["value"] = s
+                _refresh_inbox()
+
+            with ui.row().classes("gap-2 mb-3"):
+                for label, key in [("全部", "all"), ("待处理", "pending"), ("失败", "failed"),
+                                    ("需审核", "needs_review"), ("重试中", "retry")]:
+                    color = "blue" if filter_state["value"] == key else "grey"
+                    ui.button(label, on_click=lambda k=key: _set_filter(k)).props(f"color={color} flat size=sm")
+
+            # 文件列表
+            for item in items:
+                if filter_state["value"] != "all" and item["state"] != filter_state["value"]:
+                    continue
+                _build_inbox_card(item, _refresh_inbox)
+
+    _refresh_inbox()
+
+    with ui.row().classes("gap-2 mt-2"):
+        ui.button("🔄 刷新", on_click=_refresh_inbox).props("flat")
+        ui.label(f"目录: data/inbox/").classes("text-xs text-gray-500 ml-4")
+
+
+def _build_inbox_card(item: dict, on_refresh):
+    """渲染单个收件箱文件卡片。"""
+    filename = item["_filename"]
+    fp = item["_file"]
+    state = item.get("state", "pending")
+    error = item.get("error", "")
+    step = item.get("step", "")
+    failure_type = item.get("failure_type", "")
+    retry_count = item.get("retry_count", 0)
+    ts = item.get("ts", "")[:19]
+
+    # 状态 → 图标、颜色、中文
+    state_display = {
+        "pending":       ("⏳", "blue",   "待处理"),
+        "processing":    ("🔄", "blue",   "处理中"),
+        "done":          ("✅", "green",  "已完成"),
+        "failed":        ("❌", "red",    "失败"),
+        "needs_review":  ("⚠️", "orange", "需审核"),
+        "retry":         ("🔄", "purple", "等待重试"),
+    }
+    icon, color, state_cn = state_display.get(state, ("❓", "grey", state))
+
+    # 步骤中文名
+    step_names = {
+        "format_check": "格式检查", "size_check": "大小检查",
+        "extract": "文本提取", "extract_empty": "文本为空",
+        "classify": "AI 分类", "ingest": "知识入库",
+        "ocr": "文字识别", "ocr_check": "OCR 检查",
+        "timeout": "处理超时", "unknown": "未知步骤",
+        "migrated_from_v1": "旧版迁移",
+    }
+    step_cn = step_names.get(step, step) if step else "—"
+
+    # 文件大小
+    fsize = ""
+    try:
+        size_bytes = os.path.getsize(fp)
+        if size_bytes > 1024 * 1024:
+            fsize = f" | {size_bytes / (1024*1024):.1f}MB"
+        elif size_bytes > 1024:
+            fsize = f" | {size_bytes / 1024:.0f}KB"
+        else:
+            fsize = f" | {size_bytes}B"
+    except OSError:
+        pass
+
+    with ui.card().classes("w-full"):
+        with ui.row().classes("w-full items-center gap-4"):
+            ui.label(f"{icon} {filename}").classes("font-bold flex-1")
+            ui.badge(state_cn, color=color)
+            if failure_type:
+                ui.badge(failure_type, color="grey").classes("text-xs")
+
+        # 详细信息（仅失败/需审核/重试时显示）
+        if state in ("failed", "needs_review", "retry"):
+            with ui.column().classes("w-full text-xs text-gray-500 mt-1"):
+                ui.label(f"失败步骤: {step_cn}")
+                if error:
+                    ui.label(f"原因: {error}")
+                if retry_count > 0:
+                    ui.label(f"重试次数: {retry_count}")
+                if ts:
+                    ui.label(f"时间: {ts}")
+
+        # 文件信息
+        ui.label(f"路径: {fp}{fsize}").classes("text-xs text-gray-400 mt-1")
+
+        with ui.row().classes("gap-2 mt-2"):
+            # 重试按钮（失败/需审核/重试状态）
+            if state in ("failed", "needs_review", "retry"):
+                async def _retry(fn=filename):
+                    if _retry_inbox_file(fn):
+                        ui.notify(f"✅ {fn} 已加入处理队列", type="positive")
+                    else:
+                        ui.notify(f"❌ {fn} 重试失败（守望进程可能未运行）", type="negative")
+                    on_refresh()
+                ui.button("🔄 重试", on_click=lambda: asyncio.ensure_future(_retry())).props("color=blue flat size=sm")
+
+            # 删除按钮（所有状态均可删除）
+            del_dialog = ui.dialog()
+            with del_dialog:
+                with ui.card().classes("p-4"):
+                    ui.label("⚠️ 确认删除此文件？").classes("text-lg font-bold")
+                    ui.label(f"文件: {filename}").classes("text-sm text-gray-500")
+                    ui.label("文件及其状态记录将被永久删除。").classes("text-xs text-gray-400")
+                    with ui.row().classes("gap-2 mt-4"):
+                        ui.button("取消", on_click=del_dialog.close).props("flat")
+                        ui.button("确认删除", on_click=lambda dd=del_dialog, fn=filename: [
+                            _delete_inbox_file(fn),
+                            dd.close(),
+                            ui.notify(f"已删除: {fn}", type="positive"),
+                            on_refresh(),
+                        ]).props("color=red")
+            ui.button("❌ 删除", on_click=del_dialog.open).props("color=red flat size=sm")
+
+
 def _build_dlq_tab():
-    """死信队列标签页 — 列出置信度 < 低阈值的条目，支持修正/上传/删除。"""
+    """死信队列标签页 — 列出置信度 < 低阈值的条目，支持修正/上传/删除。
+    v1.0.0: 旧守望 DLQ 已迁移到统一收件箱，此标签页仅显示置信度 DLQ。"""
     ui.markdown("### 🗑️ 死信队列")
-    ui.markdown("*AI 无法分类或处理失败的内容，需要手动处理。*")
+    ui.markdown("*AI 置信度过低的内容，需要手动处理。*")
 
     dlq_container = ui.column().classes("w-full")
 
@@ -730,14 +1014,13 @@ def _build_dlq_tab():
         dlq_container.clear()
         with dlq_container:
             json_items = _load_dlq_files()
-            watch_items = _load_watch_dlq_files()
-            total = len(json_items) + len(watch_items)
 
-            if total == 0:
+            if not json_items:
                 ui.badge("🎉 死信队列为空", color="green")
+                ui.label("收件箱中的处理失败文件 → 请查看「📥 收件箱」标签页").classes("text-xs text-gray-500 mt-2")
                 return
 
-            ui.label(f"共 {total} 条死信（置信度过低: {len(json_items)} / 处理失败: {len(watch_items)}）").classes("text-sm text-gray-500 mb-2")
+            ui.label(f"共 {len(json_items)} 条死信（置信度过低）").classes("text-sm text-gray-500 mb-2")
 
             # ── 置信度过低 DLQ（JSON 格式）──
             for item in json_items:
@@ -782,58 +1065,6 @@ def _build_dlq_tab():
                                     ui.button("取消", on_click=del_dialog.close).props("flat")
                                     ui.button("确认删除", on_click=lambda f=fp, dd=del_dialog: [
                                         _delete_dlq_file(f),
-                                        log_activity("dlq_delete", "", os.path.basename(f)),
-                                        dd.close(),
-                                        ui.notify(f"已删除: {os.path.basename(f)}", type="positive"),
-                                        _refresh_dlq(),
-                                    ]).props("color=red")
-                        ui.button("❌ 删除", on_click=del_dialog.open).props("color=red flat")
-
-            # ── 守望文件夹 DLQ（原始文件 + .meta.json）──
-            for item in watch_items:
-                fp = item["_file"]
-                fname = item["_filename"]
-                error = item.get("error", "未知错误")
-                step = item.get("step", "unknown")
-                failed_at = item.get("failed_at", "")[:19]
-
-                step_names = {
-                    "format_check": "格式检查", "size_check": "大小检查",
-                    "extract": "文本提取", "extract_empty": "文本为空",
-                    "classify": "AI 分类", "ingest": "知识入库",
-                    "timeout": "处理超时",
-                }
-                step_cn = step_names.get(step, step)
-
-                with ui.card().classes("w-full"):
-                    with ui.row().classes("w-full items-center gap-4"):
-                        ui.label(f"📁 {fname}").classes("font-bold flex-1")
-                        ui.badge(f"步骤: {step_cn}", color="red")
-                        ui.badge("守望文件夹", color="purple")
-
-                    ui.label(f"失败原因: {error}").classes("text-xs text-gray-500")
-                    ui.label(f"时间: {failed_at}").classes("text-xs text-gray-400")
-
-                    with ui.row().classes("gap-2 mt-2"):
-                        async def _retry_watch(f=fp):
-                            if _move_to_watch(f):
-                                ui.notify(f"✅ 已移回 watch/，将自动重试", type="positive")
-                            else:
-                                ui.notify(f"❌ 移动失败，请手动操作", type="negative")
-                            _refresh_dlq()
-                        ui.button("📥 移回重试", on_click=_retry_watch).props("color=blue flat")
-
-                        del_dialog = ui.dialog()
-                        with del_dialog:
-                            with ui.card().classes("p-4"):
-                                ui.label("⚠️ 确认永久删除？").classes("text-lg font-bold")
-                                ui.label(f"文件: {fname}").classes("text-sm text-gray-500")
-                                ui.label("原文件 + 失败记录将被删除。").classes("text-xs text-gray-400")
-                                with ui.row().classes("gap-2 mt-4"):
-                                    ui.button("取消", on_click=del_dialog.close).props("flat")
-                                    ui.button("确认删除", on_click=lambda f=fp, dd=del_dialog: [
-                                        os.path.exists(f) and os.unlink(f),
-                                        os.path.exists(f + ".meta.json") and os.unlink(f + ".meta.json"),
                                         log_activity("dlq_delete", "", os.path.basename(f)),
                                         dd.close(),
                                         ui.notify(f"已删除: {os.path.basename(f)}", type="positive"),

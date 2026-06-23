@@ -70,6 +70,44 @@ watch:
     - "thumbs.db"               # Windows 缩略图缓存
     - "desktop.ini"             # Windows 文件夹配置
 
+# ── 守望文件夹 v2（统一收件箱 + 状态追踪）──
+watch_v2:
+  inbox_dir: "data/inbox"        # 统一收件箱目录
+  state_file: "data/file_state.jsonl"  # 状态追踪文件（append-only JSONL）
+  poll_interval: 1.0             # 文件监控轮询间隔（秒）
+  write_complete_checks: 2       # 文件写入完成确认次数
+  write_check_interval: 0.5      # 写入检查间隔（秒）
+  max_file_size_mb: 50           # 单文件大小上限（0 = 不限制）
+  processing_timeout: 600        # 单文件处理超时（秒）
+  queue_max_size: 100            # 处理队列最大长度
+
+  # 文件保留策略（内容驱动，非格式驱动）
+  retention:
+    # 逐页分析后，文件级保留 = min(每页可丢性)
+    # 任一页含非文本元素 → 保留整个文件
+    keep_file: "data/inbox"      # 保留在原目录（不入 processed/）
+    text_density_threshold: 0.3  # 文本密度低于此值 → 视为非文本页
+    ocr_conf_threshold: 0.7      # OCR 置信度低于此值 → 不可靠
+    # 保留场景（保留原文件）: 表格/图片/公式/低密度页面
+    # 删除场景（删除原文件）: 全部页面均为纯文本 + 高密度
+
+  # 故障处理策略（15 种故障 × 5 种策略）
+  failure_strategies:
+    max_auto_retries: 3          # 自动重试上限
+    auto_retry_delay: 5          # 自动重试间隔（秒）
+    infra_retry_interval: 30     # 基础设施故障后重试间隔（秒）
+    dlq_ttl_days: 30             # 死信条目自动清理（天，0 = 不清理）
+    notify_on_fatal: true        # 致命错误时是否通知
+
+  # 临时文件忽略模式（不区分大小写）
+  temp_patterns:
+    - "~$*"                     # Office 临时文件
+    - "*.tmp"                   # 通用临时文件
+    - "*.part"                  # 下载中文件
+    - "*.crdownload"            # Chrome 下载中文件
+    - "thumbs.db"               # Windows 缩略图缓存
+    - "desktop.ini"             # Windows 文件夹配置
+
 # ═══════════════════════════════════════════════════════════════
 # 以下参数只通过 .env 控制，不在 YAML 中出现：
 #

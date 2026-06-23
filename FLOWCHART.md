@@ -12,8 +12,8 @@
 ┌──────────┐    ┌──────────┐    ┌──────────────┐    ┌──────────┐
 │  摄 入   │───→│ 知识库   │←───│   搜  索     │    │  其 它   │
 │ F1→…→N7  │    │ N7(存储) │    │ N9→N10→User  │    │ DL/W1-3  │
-│          │    │ C_DUP    │    │ F6 外部查询  │    │ 系统保障  │
-│          │    │ N_UPDATE │    │ N_MANUAL修正 │    │          │
+│ F_WATCH  │    │ C_DUP    │    │ F6 外部查询  │    │ 系统保障  │
+│ (v2收件箱)│    │ N_UPDATE │    │ N_MANUAL修正 │    │          │
 │          │    │ N_DEL    │    │              │    │          │
 │          │    │ N_GRAPH  │    │              │    │          │
 └──────────┘    └──────────┘    └──────────────┘    └──────────┘
@@ -24,17 +24,17 @@
 ## 一、摄入流程
 
 > 当前重心。覆盖从"内容进来"到"入库存储"的完整管线。
-> 对应节点：F1-F5, N1, C1, N2, C2, N4_*, C3, N5, C_DUP, N_UPDATE, N6, C4, N8, N7
+> 对应节点：F1-F5, F_WATCH, N1, C1, N2, C2, N4_*, C3, N5, C_DUP, N_UPDATE, N6, C4, N8, N7, INBOX
 
 ```mermaid
 flowchart TB
-    F_WATCH([📁 守望文件夹])
+    F_WATCH([📁 守望v2<br/>data/inbox/ + state.jsonl])
     F1[拖入文件]
     F3[手动输入]
     F4[OCR图片]
     F5[外部推送]
 
-    F_WATCH -->|watch/→staging| N1
+    F_WATCH -->|文件放入inbox<br/>写入完成检测<br/>15故障×5策略| N1
     F1 --> N1
     F3 --> N1
     F4 --> N1
@@ -46,7 +46,7 @@ flowchart TB
 
     W1 --> N2
     N2{② 格式识别} -->|可识别| C2
-    N2 -->|不可识别| DL_WATCH[☠ 守望DLQ<br/>原文件+.meta.json]
+    N2 -->|不可识别| INBOX_FAILED[📥 inbox/ ← 状态:failed<br/>strategy: dlq_delete]
 
     C2{类型路由} -->|图片| N4_OCR([②b OCR])
     C2 -->|文档| N4_DOC([②a 文档提取])
@@ -55,8 +55,8 @@ flowchart TB
     N4_OCR -->|成功| C3
     N4_DOC -->|成功| C3
     N4_MAN -->|成功| C3
-    N4_OCR -.->|异常| DL_WATCH
-    N4_DOC -.->|异常| DL_WATCH
+    N4_OCR -.->|异常| INBOX_FAILED
+    N4_DOC -.->|异常| INBOX_FAILED
 
     C3{编码?} -->|可解码| N5
     C3 -->|失败| W2[⚠️ chardet推测]
@@ -76,20 +76,23 @@ flowchart TB
     N8 -->|确认| N7
     N_UPDATE --> N7
 
-    N7([⑤ 存储完成]) -->|守望来源| PROC[📂 processed/<br/>30天清理]
-    N7 -->|手动来源| DONE([✅ 完成])
+    N7([⑤ 存储完成]) -->|部分坏| N_PAGES([⑥ 逐页分析<br/>WLNK决策])
+    N_PAGES --> KEEP([📥 保留原文件<br/>inbox/中保留])
+    N_PAGES --> DELETE([🗑 删除原文件<br/>纯文本已入库])
+
+    N7 -->|正常| DONE([✅ 完成])
 
     style N7 fill:#d4edda,stroke:#28a745
-    style DL_WATCH fill:#f8d7da,stroke:#dc3545
+    style INBOX_FAILED fill:#fff3cd,stroke:#f0ad4e
     style DL_CONF fill:#f8d7da,stroke:#dc3545
-    style PROC fill:#d1ecf1,stroke:#0c5460
+    style KEEP fill:#d1ecf1,stroke:#0c5460
 ```
 
 ### 摄入节点定义
 
 | 节点 | 名称 | 输入 | 输出 | 逻辑 | 对应任务 |
 |:--:|------|------|------|------|:--:|
-| F_WATCH | 守望文件夹 | data/watch/ 监控目录 | 文件→staging→管道 | watchdog 自动监测，写入完成后移入 staging 处理 | A4 |
+| F_WATCH | 守望v2 | data/inbox/ 统一收件箱 | 文件→处理管线 | 统一收件箱 + file_state.jsonl 状态追踪；15故障×5策略(WLNK+逐页分析)；内容驱动保留(v1旧目录启动时自动迁移) | Task 1-6 |
 | F1 | 拖入文件 | 本地文件 | 原始内容 | 用户拖入/选择 | 1h |
 | F3 | 手动输入 | 键盘/剪贴板 | 原始内容 | 用户打字 | 1i |
 | F4 | OCR图片 | 图片/扫描文档 | 原始图像 | PaddleOCR | — |
@@ -98,38 +101,40 @@ flowchart TB
 | C1 | 大小检查 | 原始内容 | 通过/警告 | >50MB 警告但不阻止 | 1g |
 | N2 | ② 格式识别 | 原始内容 | 格式/编码/层级 | 16B魔数→扩展名→放弃 | 1a, 1c |
 | C2 | 类型路由 | 识别结果 | 分派到提取器 | 图片→OCR, 文档→提取, 无文件→直传 | 1f |
-| N4_DOC | ②a 文档提取 | PDF/DOCX/EPUB/HTML/TXT/SRT | 纯文本 | 按格式调用提取器 | 1b, 1c, 1e |
-| N4_OCR | ②b OCR提取 | 图片/扫描PDF | 纯文本 | PaddleOCR | — |
+| N4_DOC | ②a 文档提取 | PDF/DOCX/EPUB/HTML/TXT/SRT | 纯文本 | 按格式调用提取器(pdfplumber多页) | 1b, 1c, 1e |
+| N4_OCR | ②b OCR提取 | 图片/扫描PDF | 纯文本 | PaddleOCR(未安装→needs_review) | — |
 | N4_MAN | ②c 手动文本 | 用户输入 | 纯文本 | 直接使用 | 1h |
 | C3 | 编码检测 | 字节流 | 解码文本 | UTF-8→GBK→latin-1→chardet | 1d |
 | N5 | 文本截断 | 解码文本 | ≤5000字 | 超长截断+提示 | — |
-| C_DUP | 去重检测 | 截断文本 | 全新/相似 | 向量相似度>阈值→判重 | v0.5.0 |
+| C_DUP | 去重检测 | 截断文本 | 全新/相似 | Qdrant content_hash 去重 | v0.5.0 |
 | N_UPDATE | 更新已有 | 新文本+旧ID | 合并后向量+元数据 | 保留旧来源，追加新来源（⚠️ 未实现，当前仅 skip） | v0.5.0 |
 | N6 | ③ AI分类 | 纯文本 | 分面标签+置信度 | classify_document() LLM 按分面体系打分 | v0.4.0 |
 | C4 | 置信度路由 | 标签+置信度 | 高→入库, 中→审核, 低→DLQ | 三档阈值：≥0.75 直接 / 0.40-0.75 审核 / <0.40 DLQ | v0.4.5 |
 | N8 | ④ 审核队列 | 中置信度结果 | 确认后的标签 | 等待人工确认 | v0.4.5 |
 | N7 | ⑤ 存储 | 文本+标签+元数据 | 向量索引+文档注册 | metadata_source + source_path 写入<br/>含预存储钩子（Nigredo 接口）| v0.4.0, v0.7.0(B4) |
-| DL_WATCH | ☠ 守望死信 | 处理失败的原文件 | .meta.json + 原文件 | 格式/提取/异常→移入 data/watch_dead_letter/ | A4 |
+| N_PAGES | ⑥ 逐页分析 | 多页文档各页内容 | 每页可删性判断 | analyze_page_content() 5信号:非文本元素/密度/OCR可靠性/提取完整度/内容等效性 | Task 3-4 |
 | DL_CONF | ☠ 置信度死信 | 低置信度元数据 | JSON 文件 | 置信度<0.40→移入 local_data/dead_letter/ | v0.4.5 |
-| PROC | 📂 已处理 | 守望来源的处理完成文件 | 30天保留 | 处理完成后移入 data/watch_processed/ | A4 |
+| INBOX_FAILED | 📥 收件箱失败 | 处理失败的文件 | 留在 inbox/ + state 条目 | file_state.jsonl 记录 state:failed/needs_review/retry; 15故障×5策略(自动重试/等待基础设施/DLQ/审核/跳过) | Task 5 |
+| KEEP | 📥 保留原文件 | 含非文本元素的文件 | 保留在 inbox/ | WLNK:任一页不可删→保留整个文件 | Task 4 |
+| DELETE | 🗑 删除原文件 | 全部页面纯文本 | 删除原文件 | WLNK:全部页面可删→内容已入库，可删原文件 | Task 4 |
 
 ### 摄入连线
 
 | 起→止 | 传递内容 | 触发条件 |
 |------|------|------|
-| F_WATCH→N1 | staging 路径+原文件 | watchdog 检测到文件 → 写入完成 → 移入 staging |
+| F_WATCH→N1 | inbox 文件+状态追踪 | watchdog 检测到新文件 → 写入完成检测 → 15故障×5策略 |
 | F1→N1 | 原始内容 | N1 完成 |
 | N1→C1 | 原始内容 | N1 完成 |
 | C1→N2 | 原始内容(≤50MB) | 通过 |
 | N2→C2 | 识别结果 | 可识别 |
-| N2→DL_WATCH | 原文件+错误日志 | 不可识别 |
+| N2→INBOX_FAILED | 文件+错误日志 | 不可识别(strategy: dlq_delete) |
 | C2→N4_DOC | 识别+文档 | 类型=文档 |
 | C2→N4_OCR | 识别+图片 | 类型=图片 |
 | C2→N4_MAN | 识别+文本 | 类型=无文件 |
 | N4_*→C3 | 提取文本 | 提取完成 |
-| N4_*→DL_WATCH | 原文件+.meta.json | 提取异常/失败 |
+| N4_*→INBOX_FAILED | 文件+状态记录 | 提取异常/失败(15故障类型自动分类) |
 | C3→N5 | 解码文本 | 编码通过 |
-| C3→DL_WATCH | 原文件+.meta.json | 编码全败（latin-1 兜底已实际不可达） |
+| C3→INBOX_FAILED | 文件+状态记录 | 编码全败（latin-1 兜底已实际不可达） |
 | N5→C_DUP | 截断文本 | 截断完成 |
 | C_DUP→N6 | 截断文本 | 去重:全新 |
 | C_DUP→N_UPDATE | 新文本+旧ID | 去重:相似（⚠️ 未实现，当前 skip） |
@@ -139,8 +144,10 @@ flowchart TB
 | C4→N8 | 中置信标签 | 置信不足 (0.40-0.75) |
 | C4→DL_CONF | 低置信元数据 | 置信过低 (<0.40) |
 | N8→N7 | 确认标签 | 人工审核完成 |
-| N7→PROC | 处理完成的文件 | 来源=守望文件夹 |
-| PROC→(30天清理) | — | 定时清理 |
+| N7→N_PAGES | 完成存储的文档 | 摄入来源=watch_v2 |
+| N_PAGES→KEEP | 原文件保留 | WLNK:任一页不可删 |
+| N_PAGES→DELETE | 删除原文件 | WLNK:全部页面可删 |
+| N7→DONE | — | 非守望来源正常完成 |
 
 ---
 
@@ -235,7 +242,7 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    N2{格式识别} -->|不可识别| DL[☠ 死信队列<br/>保存副本+日志]
+    N2{格式识别} -->|不可识别| DL[☠ 死信队列<br/>置信度过低→JSON DLQ<br/>处理失败→inbox state:failed]
     C1{大小} -->|>50MB| W1[⚠️ 超限警告]
     C3{编码} -->|失败| W2[⚠️ chardet推测]
     N5{长度} -->|>5000字| W3[⚠️ 截断提示]
@@ -250,7 +257,7 @@ flowchart LR
 
 | 节点 | 名称 | 触发条件 | 处理 | 为什么这样设计 |
 |:--:|------|------|------|------|
-| DL | 死信队列 | N2 格式不可识别 | 保存副本+错误日志 | 失败不静默，保留原始文件供事后分析 |
+| DL | 死信队列 | N2 格式/置信度失败 | 置信度低→JSON DLQ(local_data/dead_letter/); 处理失败→inbox state:failed(file_state.jsonl) | 双 DLQ 通道：置信度（需手动修正/重传）vs 处理（在收件箱重试/删除）|
 | W1 | 超限警告 | 文件>50MB | 警告但仍可继续 | 不阻止用户，但提示性能风险 |
 | W2 | 编码失败 | C3 无法解码 | 标注编码失败+chardet推测 | 不丢弃内容，尽力恢复 |
 | W3 | 截断提示 | 文本>5000字 | 截断+提示用户 | LLM 上下文窗口有限，MVP 阶段暂不处理长文本切分 |
@@ -259,16 +266,18 @@ flowchart LR
 
 | 起→止 | 传递内容 | 触发条件 |
 |------|------|------|
-| N2→DL | 原始文件+错误信息 | 格式无法识别 |
+| N2→DL | 原始文件+错误信息 | 格式无法识别/置信度过低 |
+| C4→DL | 低置信元数据 | 置信度<0.40 |
 | C1→W1 | 原始内容+大小信息 | >50MB |
 | C3→W2 | 标注信息+推测编码 | 编码检测失败 |
 | N5→W3 | 截断文本+提示 | >5000字 |
 
 ---
 
-*版本: v5 | 最后更新: 2026-06-23*
+*版本: v6 | 最后更新: 2026-06-23*
 
 *变更记录:*
+- v6: 守望 v2 — F_WATCH 改为统一收件箱(inbox/ + file_state.jsonl)；DL_WATCH/PROC 删除，替换为 INBOX_FAILED(15故障×5策略)+N_PAGES(WLNK逐页分析)+KEEP/DELETE(内容驱动保留)；新增收件箱标签页节点。
 - v5: 新增 F_WATCH（守望文件夹）入口节点、DL_WATCH（守望死信）+ DL_CONF（置信度死信）双 DLQ、PROC（已处理）节点及连线。置信度路由三档化（高/中/低）。标记 N_UPDATE 未实现。新增提取异常→DL_WATCH 连线。
 - v4: 按功能域拆分为四张独立子图（摄入/搜索/知识库管理/系统保障），每张自含节点定义+连线表。总览图改为文本框图。
 - v2: 新增 6 个节点 — F6, C_DUP, N_UPDATE, N_MANUAL, N_DEL, N_GRAPH。
