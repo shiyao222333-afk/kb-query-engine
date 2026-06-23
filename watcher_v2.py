@@ -95,6 +95,7 @@ _watch_stats: dict = {
 
 
 # ═══════════════════════════════════════════
+_queued_files = set()  # 当前队列中的文件（避免重复入队）
 # 状态文件操作（file_state.jsonl）
 # ═══════════════════════════════════════════
 
@@ -1026,6 +1027,7 @@ def _process_file_with_timeout(filepath: str):
         if failure_result in ("retry", "retry_later"):
             if _queue is not None:
                 try:
+                    _queued_files.add(filepath)  # 记录到队列集合
                     _queue.put(filepath, timeout=WATCH_V2_QUEUE_PUT_TIMEOUT)
                 except Empty:
                     log_activity(
@@ -1065,6 +1067,7 @@ class WatchHandlerV2(FileSystemEventHandler):
             return
 
         try:
+            _queued_files.add(filepath)  # 记录到队列集合
             self.queue.put(filepath, timeout=WATCH_V2_QUEUE_PUT_TIMEOUT)
         except Empty:
             with _stats_lock: _watch_stats["skipped"] += 1
@@ -1096,6 +1099,7 @@ def _processing_loop_v2(queue: Queue, stop_event: threading.Event):
 
         try:
             filepath = queue.get(timeout=2.0)
+            _queued_files.discard(filepath)  # 从队列集合中移除
         except Empty:
             _cleanup_expired_states()
             # 定期救援扫描：救回因队列溢出被丢弃的文件
@@ -1166,6 +1170,7 @@ def _processing_loop_v2(queue: Queue, stop_event: threading.Event):
             # 文件可能在等待期间被删除（竞态保护）
             if os.path.isfile(filepath):
                 try:
+                    _queued_files.add(filepath)  # 记录到队列集合
                     queue.put(filepath, timeout=WATCH_V2_QUEUE_PUT_TIMEOUT)
                 except Empty:
                     pass
@@ -1191,6 +1196,7 @@ def _scan_existing_files_v2(queue: Queue):
 
     for fp in sorted(files):
         try:
+            _queued_files.add(filepath)  # 记录到队列集合
             queue.put(fp, timeout=WATCH_V2_QUEUE_PUT_TIMEOUT)
         except Empty:
             with _stats_lock: _watch_stats["skipped"] += 1
@@ -1221,7 +1227,11 @@ def _rescue_orphaned_files(queue: Queue):
         entry = state.get(filename)
         if entry and entry.get("state") in ("failed", "needs_review", "done"):
             continue
+        # 避免重复入队
+        if filepath in _queued_files:
+            continue
         try:
+            _queued_files.add(filepath)  # 记录到队列集合
             queue.put(filepath, timeout=WATCH_V2_QUEUE_PUT_TIMEOUT)
             rescued += 1
         except Empty:
@@ -1263,6 +1273,7 @@ def _recover_retry_files(queue: Queue, stop_event: threading.Event):
         filepath = os.path.join(INBOX_DIR, fname)
         if os.path.isfile(filepath):
             try:
+                _queued_files.add(filepath)  # 记录到队列集合
                 queue.put(filepath, timeout=WATCH_V2_QUEUE_PUT_TIMEOUT)
             except Empty:
                 pass
@@ -1682,6 +1693,7 @@ def retry_file_v2(filename: str) -> bool:
     # 入队
     if _queue is not None:
         try:
+            _queued_files.add(filepath)  # 记录到队列集合
             _queue.put(filepath, timeout=WATCH_V2_QUEUE_PUT_TIMEOUT)
             log_activity(
                 action="watch_v2_manual_retry",
