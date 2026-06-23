@@ -51,6 +51,7 @@ from config.settings import (
     WATCH_V2_TEMP_PATTERNS,
     WATCH_V2_QUEUE_PUT_TIMEOUT,
     WATCH_V2_CLEANUP_INTERVAL,
+    WATCH_V2_INFRA_RETRY_INTERVAL,
 )
 from text_pipeline import (
     analyze_page_content,
@@ -601,14 +602,14 @@ def _extract_pages(filepath: str, ext: str) -> list[dict]:
                     try:
                         img_list = getattr(page, 'images', []) or []
                         page_images = [f"pdf_img_{i}" for i in range(len(img_list))]
-                    except Exception:
+                    except (AttributeError, TypeError):
                         pass
 
                     # 检测表格
                     try:
                         tbl_list = page.extract_tables() or []
                         page_tables = [f"table_{i}" for i in range(len(tbl_list))]
-                    except Exception:
+                    except (AttributeError, TypeError):
                         pass
 
                     pages.append({
@@ -625,7 +626,7 @@ def _extract_pages(filepath: str, ext: str) -> list[dict]:
                     detail="pdfplumber 未安装，PDF 文件将无法提取文本。安装: pip install pdfplumber",
                 )
             pages.append({"text": "", "images": [], "tables": [], "ocr_conf": None})
-        except Exception:
+        except (OSError, ValueError) as e:
             pages.append({"text": "", "images": [], "tables": [], "ocr_conf": None})
 
     elif ext in (".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"):
@@ -641,7 +642,7 @@ def _extract_pages(filepath: str, ext: str) -> list[dict]:
                 "tables": [],
                 "ocr_conf": ocr_conf,
             })
-        except Exception:
+        except (OSError, UnicodeDecodeError) as e:
             pages.append({"text": "", "images": [], "tables": [], "ocr_conf": None})
 
     else:
@@ -732,7 +733,7 @@ def _process_file(filepath: str, cancel_event: threading.Event = None):
         # _extract_pages 内部已 catch 所有 Exception，外层 try/except 是防御性兜底
         try:
             pages = _extract_pages(filepath, ext)
-        except Exception as e:
+        except Exception as e:  # 防御性兜底：_extract_pages 内部已 catch 所有异常，此处防止未知异常导致文件静默丢失
             result = _handle_failure(filepath, filename, "extract", str(e), retry_count)
             if result == "retry":
                 retry_count += 1
@@ -773,7 +774,7 @@ def _process_file(filepath: str, cancel_event: threading.Event = None):
                                     ocr_text_parts.append(page_text)
                             elif not ocr_text_parts:
                                 ocr_text_parts.append("")
-                        except Exception:
+                        except (OSError, requests.RequestException, ValueError):
                             if not ocr_text_parts:
                                 ocr_text_parts.append("")
                     else:
@@ -822,7 +823,7 @@ def _process_file(filepath: str, cancel_event: threading.Event = None):
             
         try:
             classify_result = classify_document(full_text, file_metadata={"source_path": filepath})
-        except Exception as e:
+        except (requests.RequestException, ValueError, KeyError) as e:
             result = _handle_failure(filepath, filename, "classify", str(e), retry_count)
             if result == "retry":
                 retry_count += 1
@@ -869,7 +870,7 @@ def _process_file(filepath: str, cancel_event: threading.Event = None):
                 field_sources=field_sources,
                 overall_confidence=overall_conf,
             )
-        except Exception as e:
+        except (requests.RequestException, ValueError) as e:
             result = _handle_failure(filepath, filename, "ingest", str(e), retry_count)
             if result == "retry":
                 retry_count += 1
@@ -981,7 +982,7 @@ def _process_file_with_timeout(filepath: str):
     def target():
         try:
             _process_file(filepath, cancel_event=cancel_event)
-        except Exception as e:
+        except Exception as e:  # 线程 entry point 防御性兜底：防止线程崩溃导致文件状态未记录
             # 如果已被取消，状态由主线程 timeout handler 负责
             if cancel_event.is_set():
                 return
@@ -1106,7 +1107,7 @@ def _processing_loop_v2(queue: Queue, stop_event: threading.Event):
             loop_count += 1
             # 定期重检基础设施：infra 可能已恢复
             # 避免 infra_ok 维持 False 导致 _rescue_orphaned_files 跳过救援
-            if loop_count % 15 == 0:  # ~30 秒一次
+            if loop_count % WATCH_V2_INFRA_RETRY_INTERVAL == 0:
                 infra = _check_infra()
                 with _stats_lock:
                     _watch_stats["infra_ok"] = (infra["qdrant"] and infra["ollama"])

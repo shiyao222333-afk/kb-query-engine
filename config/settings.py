@@ -272,6 +272,10 @@ WATCH_V2_CLEANUP_INTERVAL = _yaml_or_env(
     "watch_v2.cleanup_interval", "KB_WATCH_V2_CLEANUP_INTERVAL", 300, cast=int,
     validator=lambda v: None if v >= 60 else "must be >= 60",
 )
+WATCH_V2_INFRA_RETRY_INTERVAL = _yaml_or_env(
+    "watch_v2.infra_retry_interval", "KB_WATCH_V2_INFRA_RETRY_INTERVAL", 15, cast=int,
+    validator=lambda v: None if v > 0 else "must be > 0",
+)
 # 保留策略（内容驱动，逐页 WLNK 决策）
 WATCH_V2_TEXT_DENSITY_THRESHOLD = _yaml_or_env(
     "watch_v2.retention.text_density_threshold", "KB_WATCH_V2_TEXT_DENSITY_THRESHOLD", 0.3, cast=float,

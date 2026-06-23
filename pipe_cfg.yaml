@@ -63,3 +63,4 @@ watch_v2:
   - thumbs.db
   - desktop.ini
   cleanup_interval: 300
+  infra_retry_interval: 15
