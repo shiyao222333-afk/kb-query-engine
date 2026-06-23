@@ -3,7 +3,7 @@ Citrinitas Watch Folder v2 — 统一收件箱 + 状态追踪
 
 设计原则:
   - 统一收件箱 data/inbox/：所有文件放在一个目录，不移动
-  - file_state.jsonl：只记录异常文件（failed/needs_review/retry），done 文件用 Qdrant content_hash 去重
+  - file_state.jsonl：记录所有状态（failed/needs_review/retry/done），done 防止重启后重复处理
   - 内容驱动保留策略：逐页分析内容，WLNK 决策是否保留原文件
   - 15 种故障 × 5 种策略：每个环节失败都有明确处理路径
 
@@ -704,6 +704,10 @@ def _process_file(filepath: str, cancel_event: threading.Event = None):
 
         # 提取后检查取消信号（OCR 可能耗时很长）
         if _cancelled():
+            _append_state({
+                "file": filename, "state": "retry",
+                "step": "timeout", "error": "处理超时取消（OCR后）"
+            })
             return
 
         if not pages or not any(p.get("text", "").strip() for p in pages):
@@ -735,6 +739,10 @@ def _process_file(filepath: str, cancel_event: threading.Event = None):
 
         # ── AI 分类 ──
         if _cancelled():
+            _append_state({
+                "file": filename, "state": "retry",
+                "step": "timeout", "error": "处理超时取消（分类前）"
+            })
             return
             
         try:
@@ -776,6 +784,10 @@ def _process_file(filepath: str, cancel_event: threading.Event = None):
 
         # ── 摄入 ──
         if _cancelled():
+            _append_state({
+                "file": filename, "state": "retry",
+                "step": "timeout", "error": "处理超时取消（摄入前）"
+            })
             return
             
         try:
@@ -892,6 +904,15 @@ def _process_file_with_timeout(filepath: str):
                 detail=f"处理异常: {e}",
                 source=filename,
             )
+            # 写入 failed 状态，防止文件被静默丢失
+            _append_state({
+                "file": filename,
+                "state": "failed",
+                "step": "unknown",
+                "error": f"内部异常: {e}",
+                "failure_type": "unknown",
+            })
+            _watch_stats["failed"] += 1
 
     thread = threading.Thread(target=target, daemon=True, name=f"watcher-{filename[:20]}")
     thread.start()
@@ -901,10 +922,15 @@ def _process_file_with_timeout(filepath: str):
         # 发送取消信号，让子线程在检查点退出
         cancel_event.set()
 
+        # 从状态中读取已有 retry_count（防止 timeout 无限重试循环）
+        existing_state = _get_file_state(filename)
+        existing_retry_count = existing_state.get("retry_count", 0) if existing_state else 0
+
         # 标记失败并检查策略
         failure_result = _handle_failure(
             filepath, filename, "timeout",
             f"处理超时（>{WATCH_V2_PROCESSING_TIMEOUT}秒）",
+            retry_count=existing_retry_count,
         )
 
         # 根据策略决定是否重新入队
@@ -1029,10 +1055,12 @@ def _processing_loop_v2(queue: Queue, stop_event: threading.Event):
         # 写入完成检测
         if not _is_write_complete(filepath):
             time.sleep(1)
-            try:
-                queue.put(filepath, timeout=0.5)
-            except Exception:
-                pass
+            # 文件可能在等待期间被删除（竞态保护）
+            if os.path.isfile(filepath):
+                try:
+                    queue.put(filepath, timeout=0.5)
+                except Exception:
+                    pass
             continue
 
         # 处理文件
@@ -1096,7 +1124,19 @@ def _rescue_orphaned_files(queue: Queue):
 
 
 def _recover_retry_files(queue: Queue, stop_event: threading.Event):
-    """恢复 retry 状态的文件——基础设施恢复后自动重试。"""
+    """恢复 retry 状态的文件——基础设施恢复后自动重试。
+    
+    启动时检查基础设施，不满足条件则跳过恢复（等 _rescue_orphaned_files 救援）。
+    """
+    # 基础设施检查 — 避免 retry 文件入队后被 infra_check 再次标记 retry
+    infra = _check_infra()
+    if not (infra["qdrant"] and infra["ollama"]):
+        log_activity(
+            action="watch_v2_retry_recovery_skipped",
+            detail=f"基础设施不可用，跳过 retry 文件恢复 (qdrant={infra['qdrant']}, ollama={infra['ollama']})",
+        )
+        return
+
     state = _load_state()
     retry_files = [fname for fname, entry in state.items() if entry.get("state") == "retry"]
     if not retry_files:

@@ -79,11 +79,15 @@ def _ensure_inbox_dir():
 
 
 def _load_inbox_files() -> list:
-    """加载统一收件箱文件列表（含状态）。使用 watcher_v2 的锁保护状态读取。"""
+    """加载统一收件箱文件列表（含状态）。使用 watcher_v2 的锁保护状态读取。
+    
+    快照一致性: 先读状态快照再扫描目录，最小化 TOCTOU 窗口。
+    UI 快照与磁盘状态之间最多差一个刷新周期，属于可接受的显示延迟。
+    """
     import watcher_v2
     items = []
 
-    # 获取锁保护的状态数据（而非直接读 JSONL）
+    # 获取锁保护的状态数据（而非直接读 JSONL）— 先读状态，再扫描目录
     states = watcher_v2.get_all_states()
 
     # 扫描 inbox 目录
