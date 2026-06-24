@@ -209,7 +209,7 @@
 | **A2** ✅ | 增强 `run.bat` | Qdrant/Ollama 健康检查 + 依赖完整性检测 + 守望守护进程启动 + 优雅关闭顺序 | run.bat |
 | **A3** ✅ | YAML 配置化 | 管道参数从代码移到 `pipe_cfg.yaml`（11 项），`config/settings.py` 加载器，`.env` 覆盖 YAML，P1-3 验证/P2-3 边界文档/P2-6 变更检测 | 新建 + 4 模块改造 |
 | **A4** | 守望文件夹 | `watch/` 目录自动监控摄入（watchdog），文件完整性检测，并发安全，死信队列 | 新建 + kb_query.py |
-| **A5** | OCR 接入管道 | 图片/扫描件→OCR 识字→正常走管道，PaddleOCR 预热，混合 PDF 支持 | kb_query.py + text_pipeline.py |
+| **A5** ✅ | OCR 接入管道 | 图片/扫描件→OCR 识字→正常走管道，PaddleOCR 预热，混合 PDF 支持 | kb_query.py + text_pipeline.py |
 
 ### 缺口清单（四轮审查合并，去重后 42 项）
 
