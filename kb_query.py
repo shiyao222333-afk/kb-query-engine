@@ -1,6 +1,6 @@
 """
 KB Query Engine - 中文技术文档知识库问答系统
-版本: v0.4.6 — AI分析确认卡片 + 元数据预填
+版本: v0.9.0 — 守望文件夹自动摄入 + 混合检索 + 待审核队列
 
 架构:
   摄入: 图片/文本 → PaddleOCR/PPStructureV3 → 分块嵌入 → Qdrant

@@ -83,6 +83,21 @@ def _prepare_metadata(base_meta: dict, text: str, source: str, file_path: str) -
         "confidence":     base_meta.get("confidence_overall", None),
         # 图片
         "valid_images":   base_meta.get("_valid_images", []),
+        # 扩展槽透传
+        "ext_text1": base_meta.get("ext_text1"),
+        "ext_text2": base_meta.get("ext_text2"),
+        "ext_text3": base_meta.get("ext_text3"),
+        "ext_text4": base_meta.get("ext_text4"),
+        "ext_text5": base_meta.get("ext_text5"),
+        "ext_num1":  base_meta.get("ext_num1"),
+        "ext_num2":  base_meta.get("ext_num2"),
+        "ext_num3":  base_meta.get("ext_num3"),
+        "ext_bool1": base_meta.get("ext_bool1"),
+        "ext_bool2": base_meta.get("ext_bool2"),
+        "ext_bool3": base_meta.get("ext_bool3"),
+        "ext_date1": base_meta.get("ext_date1"),
+        "ext_date2": base_meta.get("ext_date2"),
+        "ext_date3": base_meta.get("ext_date3"),
     }
 
 
@@ -152,13 +167,21 @@ def _build_point(chunk: str, vec: list, i: int, total_chunks: int,
         # 字段来源 + 置信度
         "field_sources":  m["field_sources"],
         "confidence":     m["confidence"],
-        # 预留扩展
-        "ext_text1": None, "ext_text2": None, "ext_text3": None,
-        "ext_text4": None, "ext_text5": None,
-        "ext_num1":  None, "ext_num2":  None, "ext_num3": None,
-        "ext_bool1": None, "ext_bool2": None, "ext_bool3": None,
-        "ext_date1": None, "ext_date2": None, "ext_date3": None,
     }
+    # 扩展槽（只写入有值的字段，不写 None）
+    for i, val in enumerate([m.get("ext_text1"), m.get("ext_text2"), m.get("ext_text3"),
+                              m.get("ext_text4"), m.get("ext_text5")], 1):
+        if val is not None:
+            payload[f"ext_text{i}"] = val
+    for i, val in enumerate([m.get("ext_num1"), m.get("ext_num2"), m.get("ext_num3")], 1):
+        if val is not None:
+            payload[f"ext_num{i}"] = val
+    for i, val in enumerate([m.get("ext_bool1"), m.get("ext_bool2"), m.get("ext_bool3")], 1):
+        if val is not None:
+            payload[f"ext_bool{i}"] = val
+    for i, val in enumerate([m.get("ext_date1"), m.get("ext_date2"), m.get("ext_date3")], 1):
+        if val is not None:
+            payload[f"ext_date{i}"] = val
 
     point = {
         "id": point_id,

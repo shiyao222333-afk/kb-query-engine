@@ -770,16 +770,12 @@ def _check_lock_file() -> bool:
             pass
         return True
 
-    # 检查该 PID 是否还活着
+    # 跨平台检查进程是否存在（替代 ctypes.windll）
     try:
-        import ctypes
-        PROCESS_QUERY_INFORMATION = 0x0400
-        handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_INFORMATION, False, pid)
-        if handle:
-            ctypes.windll.kernel32.CloseHandle(handle)
-            return False  # 进程还在
-    except Exception:
-        pass  # 非 Windows 或权限不足，保守允许启动
+        os.kill(pid, 0)  # 信号 0 - 只检查进程是否存在
+        return False  # 进程存在，已有实例运行
+    except OSError:
+        pass
 
     # 进程不在了，清理僵尸锁
     try:

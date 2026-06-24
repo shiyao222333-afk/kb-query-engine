@@ -294,7 +294,7 @@ graph TD
 
     ROOT --> KB[kb_query.py<br>主程序]
 
-    ROOT --> START[start.bat / stop.bat<br>启动/停止脚本]
+    ROOT --> RUN[run.bat<br>一站式启动]
 
     ROOT --> DATA[local_data/<br>OCR结果存档]
     ROOT --> QR[qdrant_data/<br>Qdrant数据库]

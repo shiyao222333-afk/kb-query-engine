@@ -21,6 +21,9 @@ PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _dotenv_path = os.path.join(PROJECT_DIR, ".env")
 if os.path.isfile(_dotenv_path):
     load_dotenv(_dotenv_path)
+else:
+    print("[settings] WARNING: 未找到 .env 文件，使用 YAML 默认值 + 系统环境变量")
+    print(f"  可以从 .env.example 复制并填写: cp .env.example .env")
 
 # ── 加载 YAML ──
 _yaml_path = os.path.join(PROJECT_DIR, "pipe_cfg.yaml")
