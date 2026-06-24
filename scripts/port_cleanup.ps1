@@ -119,7 +119,7 @@ if (-not $pids -or $pids.Count -eq 0) {
     exit 0
 }
 
-Write-Log "Found processes occupying port $Port:"
+Write-Log "Found processes occupying port ${Port}:"
 foreach ($pid in $pids) {
     Write-Log "  $(Get-ProcessInfo -Pid $pid)"
 }
