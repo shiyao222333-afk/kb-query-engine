@@ -97,7 +97,8 @@ _watch_stats: dict = {
 
 
 # ═══════════════════════════════════════════
-_queued_files = set()  # 当前队列中的文件（避免重复入队）
+_queued_files = set()    # 当前队列中等待处理的文件（避免重复入队）
+_in_flight = set()       # 当前正在处理的文件（已出队但未完成）
 # 状态文件操作（file_state.jsonl）
 # ═══════════════════════════════════════════
 
@@ -1174,6 +1175,7 @@ def _processing_loop_v2(queue: Queue, stop_event: threading.Event):
         try:
             filepath = queue.get(timeout=2.0)
             _queued_files.discard(filepath)  # 从队列集合中移除
+            _in_flight.add(filepath)         # 标记为正在处理（防 _rescue 竞态重复入队）
         except Empty:
             _cleanup_expired_states()
             # 定期救援扫描：救回因队列溢出被丢弃的文件
@@ -1189,69 +1191,72 @@ def _processing_loop_v2(queue: Queue, stop_event: threading.Event):
             continue
 
         loop_count += 1
-        filename = os.path.basename(filepath)
+        try:
+            filename = os.path.basename(filepath)
 
-        if not os.path.isfile(filepath):
-            continue
-
-        if _is_temp_file(filename):
-            with _stats_lock: _watch_stats["skipped"] += 1
-            continue
-
-        # 检查已有状态（跳过 failed/needs_review 的文件，除非手动触发重试）
-        existing_state = _get_file_state(filename)
-        if existing_state:
-            existing_status = existing_state.get("state", "")
-            if existing_status in ("failed", "needs_review"):
-                # 不自动重试，等用户手动操作
+            if not os.path.isfile(filepath):
                 continue
 
-        # 基础设施检查
-        infra = _check_infra()
-        if not (infra["qdrant"] and infra["ollama"]):
-            with _stats_lock: _watch_stats["infra_ok"] = False
-            log_activity(
-                action="watch_v2_infra_down",
-                detail=f"基础设施不可用 (qdrant={infra['qdrant']}, ollama={infra['ollama']})",
-            )
-            # 标记为 retry，不阻塞处理循环
-            # _recover_retry_files + _rescue_orphaned_files 会在恢复时重新入队
-            _append_state({
-                "file": filename,
-                "state": "retry",
-                "step": "infra_check",
-                "error": f"基础设施不可用 (qdrant={infra['qdrant']}, ollama={infra['ollama']})",
-            })
-            continue
-
-        with _stats_lock: _watch_stats["infra_ok"] = True
-
-        # 磁盘空间检查
-        disk = _check_disk_space(min_free_mb=100)
-        if not disk["ok"]:
-            log_activity(
-                action="watch_v2_disk_full",
-                detail=f"磁盘空间不足: {disk['free_mb']:.0f}MB 可用",
-            )
-            result = _handle_failure(filepath, filename, "any", "disk_full")
-            if result == "retry_later":
+            if _is_temp_file(filename):
+                with _stats_lock: _watch_stats["skipped"] += 1
                 continue
-            return
 
-        # 写入完成检测
-        if not _is_write_complete(filepath):
-            time.sleep(1)
-            # 文件可能在等待期间被删除（竞态保护）
-        if os.path.isfile(filepath):
-            try:
-                _queued_files.add(filepath)  # 记录到队列集合
-                queue.put(filepath, timeout=WATCH_V2_QUEUE_PUT_TIMEOUT)
-            except Full:
-                pass
-            continue
+            # 检查已有状态（跳过 failed/needs_review 的文件，除非手动触发重试）
+            existing_state = _get_file_state(filename)
+            if existing_state:
+                existing_status = existing_state.get("state", "")
+                if existing_status in ("failed", "needs_review"):
+                    # 不自动重试，等用户手动操作
+                    continue
 
-        # 处理文件
-        _process_file_with_timeout(filepath)
+            # 基础设施检查
+            infra = _check_infra()
+            if not (infra["qdrant"] and infra["ollama"]):
+                with _stats_lock: _watch_stats["infra_ok"] = False
+                log_activity(
+                    action="watch_v2_infra_down",
+                    detail=f"基础设施不可用 (qdrant={infra['qdrant']}, ollama={infra['ollama']})",
+                )
+                # 标记为 retry，不阻塞处理循环
+                # _recover_retry_files + _rescue_orphaned_files 会在恢复时重新入队
+                _append_state({
+                    "file": filename,
+                    "state": "retry",
+                    "step": "infra_check",
+                    "error": f"基础设施不可用 (qdrant={infra['qdrant']}, ollama={infra['ollama']})",
+                })
+                continue
+
+            with _stats_lock: _watch_stats["infra_ok"] = True
+
+            # 磁盘空间检查
+            disk = _check_disk_space(min_free_mb=100)
+            if not disk["ok"]:
+                log_activity(
+                    action="watch_v2_disk_full",
+                    detail=f"磁盘空间不足: {disk['free_mb']:.0f}MB 可用",
+                )
+                result = _handle_failure(filepath, filename, "any", "disk_full")
+                if result == "retry_later":
+                    continue
+                return
+
+            # 写入完成检测
+            if not _is_write_complete(filepath):
+                time.sleep(1)
+                # 文件可能在等待期间被删除（竞态保护）
+            if os.path.isfile(filepath):
+                try:
+                    _queued_files.add(filepath)  # 记录到队列集合
+                    queue.put(filepath, timeout=WATCH_V2_QUEUE_PUT_TIMEOUT)
+                except Full:
+                    pass
+                continue
+
+            # 处理文件
+            _process_file_with_timeout(filepath)
+        finally:
+            _in_flight.discard(filepath)
 
     # 优雅退出：把所有非终态改成 retry，下次启动时自动恢复
     _fix_incomplete_states()
@@ -1304,8 +1309,8 @@ def _rescue_orphaned_files(queue: Queue):
         entry = state.get(filename)
         if entry and entry.get("state") in ("failed", "needs_review", "done"):
             continue
-        # 避免重复入队
-        if filepath in _queued_files:
+        # 避免重复入队（队列中 + 处理中）
+        if filepath in _queued_files or filepath in _in_flight:
             continue
         try:
             _queued_files.add(filepath)  # 记录到队列集合
