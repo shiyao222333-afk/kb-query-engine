@@ -198,6 +198,7 @@ def search(
             })
         prefetch.append({
             "query": query_vec,
+            "using": "dense",   # 命名向量模式：指定使用 "dense" 命名向量
             "limit": top_k * 2,
         })
 

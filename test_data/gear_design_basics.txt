@@ -1,0 +1,28 @@
+齿轮设计基础知识
+
+齿轮是一种机械元件，用于传递动力和运动。常见的齿轮类型包括：
+- 直齿轮（Spur Gear）
+- 斜齿轮（Helical Gear）
+- 锥齿轮（Bevel Gear）
+- 蜗轮蜗杆（Worm Gear）
+
+齿轮设计的关键参数：
+1. 模数（Module）：m = pitch diameter / number of teeth
+2. 压力角（Pressure Angle）：标准值 20°
+3. 齿数（Number of Teeth）：z
+4. 分度圆直径（Reference Diameter）：d = m * z
+
+强度计算公式：
+σ_F = F_t / (b * m_n * Y_F * Y_S)
+其中：
+- σ_F: 齿根弯曲应力
+- F_t: 切向力
+- b: 齿宽
+- m_n: 法向模数
+- Y_F: 齿形系数
+- Y_S: 应力修正系数
+
+材料选择：
+- 45 钢：调质处理，HB 220-250
+- 40Cr：高频淬火，HRC 48-55
+- 20CrMnTi：渗碳淬火，HRC 58-63

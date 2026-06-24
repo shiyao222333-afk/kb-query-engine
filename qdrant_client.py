@@ -52,11 +52,14 @@ def create_collection(collection: str) -> dict:
         if collection in existing:
             return {"ok": False, "error": f"集合「{collection}」已存在"}
 
-        # ── 集合主体配置（稠密向量 + 稀疏向量 + 量化）──
+        # ── 集合主体配置（命名向量：dense + bm25）──
+        # v0.8.0+：使用命名向量格式（兼容 Qdrant v1.10+）
         collection_config = {
             "vectors": {
-                "size": EMBED_DIM,
-                "distance": "Cosine"
+                "dense": {
+                    "size": EMBED_DIM,
+                    "distance": "Cosine"
+                }
             },
             "sparse_vectors": {
                 "bm25": {"modifier": "idf"}
