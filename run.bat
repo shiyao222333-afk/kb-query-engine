@@ -2,6 +2,7 @@
 REM ============================================================
 REM  Citrinitas · 熔知 - One-Click Launcher
 REM ============================================================
+chcp 65001 > nul
 setlocal enabledelayedexpansion
 
 set "PROJECT_DIR=%~dp0"
@@ -112,7 +113,8 @@ if exist "%PROJECT_DIR%.env" (
       "$key=''; $url=''; Get-Content '%PROJECT_DIR%.env' | ForEach-Object { if ($_ -match '^KB_LLM_API_KEY=(.+)$') { $key=$Matches[1] } elseif ($_ -match '^KB_LLM_BASE_URL=(.+)$') { $url=$Matches[1] } }; " ^
       "if ($key) { Write-Host '  LLM API key configured' } else { Write-Host '  [!] LLM API key not set' }; " ^
       "if ($key -and $url) { " ^
-      "  try { $null = Invoke-WebRequest -Uri '$url/models' -Method GET -Headers @{Authorization='Bearer '+$key} -TimeoutSec 5 -ErrorAction Stop; Write-Host '  LLM API reachable' } catch { Write-Host '  [!] LLM API unreachable:' $_.Exception.Message }; " ^
+      "  try { $null = Invoke-WebRequest -Uri \"$url/models\" -Method GET -Headers @{Authorization='Bearer '+$key} -TimeoutSec 5 -ErrorAction Stop -UseBasicParsing; Write-Host '  LLM API reachable' } " ^
+      "  catch { Write-Host ('  [!] LLM API unreachable: ' + $_.Exception.Message) } " ^
       "} elseif ($key) { Write-Host '  [!] KB_LLM_BASE_URL not set, skipping API check' }"
 ) else (
     echo   [!] .env not found. LLM API key not configured.
@@ -120,27 +122,73 @@ if exist "%PROJECT_DIR%.env" (
 )
 
 REM ============================================================
-REM  Step 5: 启动 Qdrant
+REM  Step 5: 启动 Qdrant（自动检测 + 自动安装）
 REM ============================================================
 echo.
 echo [5/8] Starting Qdrant...
 
+set "QDRANT_EXE="
+
+REM 5a. 检查 Qdrant 是否已在运行
 tasklist /FI "IMAGENAME eq qdrant.exe" 2>NUL | find /I "qdrant.exe" >NUL
-if %ERRORLEVEL% NEQ 0 (
-    if exist "D:\qdrant\qdrant.exe" (
-        echo   Launching Qdrant...
-        powershell -Command "Start-Process 'D:\qdrant\qdrant.exe' -ArgumentList '--config-path','D:\qdrant\config\config.yaml' -WindowStyle Hidden"
-    ) else (
-        echo   [!] Qdrant not found at D:\qdrant\qdrant.exe
-        echo   Vector search disabled. Please install Qdrant.
-        set "QDRANT_SKIP=1"
-        goto :skip_qdrant
-    )
-) else (
+if %ERRORLEVEL% EQU 0 (
     echo   Qdrant already running (checking health...)
     set "QDRANT_SKIP=0"
     goto :check_qdrant_health
 )
+
+REM 5b. 未运行 → 自动检测 Qdrant 路径
+echo   Detecting Qdrant installation...
+for /f "delims=" %%p in ('powershell -NoProfile -Command ".& '%PROJECT_DIR%scripts\qdrant_helper.ps1' -Action detect -ProjectDir '%PROJECT_DIR%'" 2^>NUL') do (
+    set "QDRANT_EXE=%%p"
+)
+if not "!QDRANT_EXE!"=="" (
+    echo   Found Qdrant: !QDRANT_EXE!
+    goto :launch_qdrant
+)
+
+REM 5c. 未检测到 → 询问用户是否自动安装
+echo   [!] Qdrant not found on this system.
+echo   Citrinitas needs Qdrant for vector search.
+echo.
+set /p QDRANT_INSTALL="  Auto-install Qdrant locally (Y/N)? [Y]: "
+if "!QDRANT_INSTALL!"=="" set "QDRANT_INSTALL=Y"
+
+if /i "!QDRANT_INSTALL!"=="Y" (
+    echo   Installing Qdrant to %PROJECT_DIR%qdrant\ ...
+    powershell -NoProfile -ExecutionPolicy Bypass -Command ".& '%PROJECT_DIR%scripts\qdrant_helper.ps1' -Action install -ProjectDir '%PROJECT_DIR%'"
+    if !ERRORLEVEL! EQU 0 (
+        for /f "delims=" %%p in ('powershell -NoProfile -Command ".& '%PROJECT_DIR%scripts\qdrant_helper.ps1' -Action detect -ProjectDir '%PROJECT_DIR%'" 2^>NUL') do (
+            set "QDRANT_EXE=%%p"
+        )
+        if not "!QDRANT_EXE!"=="" (
+            echo   Qdrant installed successfully: !QDRANT_EXE!
+            goto :launch_qdrant
+        )
+    )
+    echo   [ERROR] Auto-install failed. Please install manually.
+    echo   Visit: https://github.com/qdrant/qdrant/releases
+    pause
+    exit /b 1
+) else (
+    echo   [!] Skipping Qdrant. Vector search will be disabled.
+    set "QDRANT_SKIP=1"
+    goto :skip_qdrant
+)
+
+REM 5d. 启动 Qdrant
+:launch_qdrant
+echo   Launching Qdrant...
+set "QDRANT_DIR="
+for %%p in ("!QDRANT_EXE!\..") do set "QDRANT_DIR=%%~fp"
+
+REM 构建启动命令（config 可选）
+set "PS_CMD=Start-Process -FilePath '!QDRANT_EXE!' -WindowStyle Hidden"
+if exist "!QDRANT_DIR!\config\config.yaml" (
+    set "PS_CMD=!PS_CMD! -ArgumentList '--config-path','!QDRANT_DIR!\config\config.yaml'"
+)
+powershell -Command "!PS_CMD!"
+set "QDRANT_SKIP=0"
 
 REM ============================================================
 REM  Step 5b: Qdrant 健康检查 — 轮询 /health (P0-3)
@@ -150,7 +198,7 @@ set /a QDRANT_RETRY=0
 :retry_qdrant
 timeout /t 2 /nobreak > nul
 set /a QDRANT_RETRY+=1
-powershell -Command "try { (Invoke-WebRequest -Uri 'http://127.0.0.1:6333/readyz' -TimeoutSec 2).Content } catch { exit 1 }" >NUL 2>NUL
+powershell -Command "try { (Invoke-WebRequest -Uri 'http://127.0.0.1:6333/readyz' -TimeoutSec 2 -UseBasicParsing).Content } catch { exit 1 }" >NUL 2>NUL
 if %ERRORLEVEL% EQU 0 (
     echo   Qdrant healthy ^(port 6333^)
     goto :skip_qdrant
@@ -160,7 +208,7 @@ if !QDRANT_RETRY! LSS 30 (
     goto :retry_qdrant
 )
 echo   [ERROR] Qdrant did not start within 60 seconds.
-echo   Please check D:\qdrant\qdrant.exe manually.
+echo   Please check Qdrant installation manually.
 pause
 exit /b 1
 
