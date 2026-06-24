@@ -10,6 +10,13 @@ qdrant_data/
 snapshots/
 storage/
 
+# Qdrant 本地安装目录（由 run.bat 自动下载）
+qdrant/
+
+# 运行时锁文件
+data/.watch_v2.lock
+data/.watch_v2_migrated
+
 # Python
 __pycache__/
 *.pyc

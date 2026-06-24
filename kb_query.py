@@ -604,7 +604,7 @@ if __name__ == "__main__":
 def get_facet_stats(collection: str = None) -> dict:
     """获取分面统计分布（全量滚动统计）。"""
     if collection is None:
-        collection = ACTIVE_COLLECTION
+        collection = DEFAULT_COLLECTION
 
     try:
         import requests as _req

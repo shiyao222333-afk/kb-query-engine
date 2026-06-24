@@ -128,26 +128,32 @@ echo.
 echo [5/8] Starting Qdrant...
 
 set "QDRANT_EXE="
+set "QDRANT_SKIP="
 
-REM 5a. 检查 Qdrant 是否已在运行
-tasklist /FI "IMAGENAME eq qdrant.exe" 2>NUL | find /I "qdrant.exe" >NUL
-if %ERRORLEVEL% EQU 0 (
-    echo   Qdrant already running (checking health...)
+REM 5a. 调用 qdrant_helper.ps1 检测 Qdrant
+REM     返回值：
+REM       - "API_ALREADY_RUNNING" → Qdrant 已在运行（API 端口有响应）
+REM       - "<path>"             → 找到 Qdrant 二进制文件
+REM       - ""                   → 未找到
+echo   Detecting Qdrant...
+for /f "delims=" %%p in ('powershell -NoProfile -Command "& '%PROJECT_DIR%scripts\qdrant_helper.ps1' -Action detect -ProjectDir '%PROJECT_DIR%'" 2^>NUL') do (
+    set "QDRANT_RESULT=%%p"
+)
+
+REM 检查检测结果
+if "!QDRANT_RESULT!"=="API_ALREADY_RUNNING" (
+    echo   Qdrant is already running (API responding on port 6333)
     set "QDRANT_SKIP=0"
     goto :check_qdrant_health
 )
 
-REM 5b. 未运行 → 自动检测 Qdrant 路径
-echo   Detecting Qdrant installation...
-for /f "delims=" %%p in ('powershell -NoProfile -Command ".& '%PROJECT_DIR%scripts\qdrant_helper.ps1' -Action detect -ProjectDir '%PROJECT_DIR%'" 2^>NUL') do (
-    set "QDRANT_EXE=%%p"
-)
-if not "!QDRANT_EXE!"=="" (
+if not "!QDRANT_RESULT!"=="" (
+    set "QDRANT_EXE=!QDRANT_RESULT!"
     echo   Found Qdrant: !QDRANT_EXE!
     goto :launch_qdrant
 )
 
-REM 5c. 未检测到 → 询问用户是否自动安装
+REM 5b. 未检测到 → 询问用户是否自动安装
 echo   [!] Qdrant not found on this system.
 echo   Citrinitas needs Qdrant for vector search.
 echo.
@@ -156,12 +162,14 @@ if "!QDRANT_INSTALL!"=="" set "QDRANT_INSTALL=Y"
 
 if /i "!QDRANT_INSTALL!"=="Y" (
     echo   Installing Qdrant to %PROJECT_DIR%qdrant\ ...
-    powershell -NoProfile -ExecutionPolicy Bypass -Command ".& '%PROJECT_DIR%scripts\qdrant_helper.ps1' -Action install -ProjectDir '%PROJECT_DIR%'"
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "& '%PROJECT_DIR%scripts\qdrant_helper.ps1' -Action install -ProjectDir '%PROJECT_DIR%'"
     if !ERRORLEVEL! EQU 0 (
-        for /f "delims=" %%p in ('powershell -NoProfile -Command ".& '%PROJECT_DIR%scripts\qdrant_helper.ps1' -Action detect -ProjectDir '%PROJECT_DIR%'" 2^>NUL') do (
-            set "QDRANT_EXE=%%p"
+        REM 重新检测（获取安装后的路径）
+        for /f "delims=" %%p in ('powershell -NoProfile -Command "& '%PROJECT_DIR%scripts\qdrant_helper.ps1' -Action detect -ProjectDir '%PROJECT_DIR%'" 2^>NUL') do (
+            set "QDRANT_RESULT=%%p"
         )
-        if not "!QDRANT_EXE!"=="" (
+        if not "!QDRANT_RESULT!"=="" (
+            set "QDRANT_EXE=!QDRANT_RESULT!"
             echo   Qdrant installed successfully: !QDRANT_EXE!
             goto :launch_qdrant
         )
@@ -176,7 +184,7 @@ if /i "!QDRANT_INSTALL!"=="Y" (
     goto :skip_qdrant
 )
 
-REM 5d. 启动 Qdrant
+REM 5c. 启动 Qdrant
 :launch_qdrant
 echo   Launching Qdrant...
 set "QDRANT_DIR="
