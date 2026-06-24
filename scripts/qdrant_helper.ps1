@@ -98,6 +98,15 @@ if ($Action -eq "detect") {
         if (Test-Path $localPath) { $candidates += $localPath }
     }
 
+    # 1d2. 常见手动安装位置（用户自定义路径）
+    $commonPaths = @(
+        Join-Path $env:USERPROFILE "qdrant\qdrant.exe",
+        Join-Path $env:ProgramFiles "qdrant\qdrant.exe"
+    )
+    foreach ($p in $commonPaths) {
+        if (Test-Path $p) { $candidates += $p }
+    }
+
     # 1e. 有限递归搜索（使用环境变量，通用不依赖具体机器）
     #     搜索根目录：ProgramFiles, LOCALAPPDATA, USERPROFILE, APPDATA
     #     递归深度：2（兼顾覆盖率和速度）
@@ -120,8 +129,54 @@ if ($Action -eq "detect") {
         }
     }
 
+
+    # 1f. 动态磁盘搜索（搜索所有本地磁盘的常见安装位置）
+    #     搜索模式：<磁盘根>\qdrant\qdrant.exe 或 <磁盘>\*\qdrant\qdrant.exe
+    #     深度：2（仅在磁盘根目录和一级子目录搜索，避免全盘扫描）
+    try {
+        $drives = Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue | Where-Object { $_.Used -gt 0 } | Select-Object -ExpandProperty Root
+        foreach ($drive in $drives) {
+            # 1f-1. 直接检查 <磁盘>\qdrant\qdrant.exe
+            $directPath = Join-Path $drive "qdrant\qdrant.exe"
+            if (Test-Path $directPath) {
+                $candidates += $directPath
+            }
+            # 1f-2. 搜索 <磁盘>\*\qdrant\qdrant.exe（一级子目录下的 qdrant）
+            try {
+                Get-ChildItem -Path $drive -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+                    $subPath = Join-Path $_.FullName "qdrant\qdrant.exe"
+                    if (Test-Path $subPath) {
+                        $candidates += $subPath
+                    }
+                }
+            } catch {
+                # 忽略权限错误
+            }
+        }
+    } catch {
+        # 获取磁盘列表失败，跳过动态搜索
+    }
+
+    # 1g. 去重并写结果文件
     # 1f. 去重并写结果文件
     $candidates = $candidates | Select-Object -Unique
+
+    # 文件完整性检查（防止坏文件 — qdrant.exe 正常约 20-30MB）
+    $validCandidates = @()
+    foreach ($c in $candidates) {
+        try {
+            $fileSize = (Get-Item $c -ErrorAction Stop).Length
+            if ($fileSize -gt 10MB) {
+                $validCandidates += $c
+            } else {
+                Write-Host "  [WARN] 跳过损坏的 qdrant.exe: $c (大小: $([math]::Round($fileSize/1KB, 1)) KB，正常应 > 10MB)"
+            }
+        } catch {
+            Write-Host "  [WARN] 无法检查文件: $c"
+        }
+    }
+    $candidates = $validCandidates
+
     if ($candidates.Count -gt 0) {
         Write-DetectResult $candidates[0]
         exit 0
@@ -328,6 +383,17 @@ if ($Action -eq "start") {
             $localPath = Join-Path $ProjectDir "qdrant\qdrant.exe"
             if (Test-Path $localPath) { $exePath = $localPath }
         }
+
+        # 常见手动安装位置
+        if (-not $exePath) {
+            $commonPaths = @(
+                Join-Path $env:USERPROFILE "qdrant\qdrant.exe",
+                Join-Path $env:ProgramFiles "qdrant\qdrant.exe"
+            )
+            foreach ($p in $commonPaths) {
+                if (Test-Path $p) { $exePath = $p; break }
+            }
+        }
     }
 
     if (-not $exePath) {
@@ -392,3 +458,5 @@ if ($Action -eq "start") {
 # start 动作已移除
 # Write-Host "  [ERROR] Unknown action: $Action"
 exit 1
+
+
