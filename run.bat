@@ -9,9 +9,9 @@ set "PROJECT_DIR=%~dp0"
 cd /d "%PROJECT_DIR%"
 
 echo.
-echo ╔══════════════════════════════════════════════════╗
-echo ║   Citrinitas · 熔知  v1.0.0                      ║
-echo ╚══════════════════════════════════════════════════╝
+echo ============================================================
+echo    Citrinitas - 熔知  v1.0.0
+echo ============================================================
 echo.
 
 REM ============================================================
@@ -108,18 +108,7 @@ if %ERRORLEVEL% EQU 0 (
 )
 
 REM  LLM API 可用性检查 (P1-11: classify_document 依赖)
-if exist "%PROJECT_DIR%.env" (
-    powershell -Command ^
-      "$key=''; $url=''; Get-Content '%PROJECT_DIR%.env' | ForEach-Object { if ($_ -match '^KB_LLM_API_KEY=(.+)$') { $key=$Matches[1] } elseif ($_ -match '^KB_LLM_BASE_URL=(.+)$') { $url=$Matches[1] } }; " ^
-      "if ($key) { Write-Host '  LLM API key configured' } else { Write-Host '  [!] LLM API key not set' }; " ^
-      "if ($key -and $url) { " ^
-      "  try { $testUrl = $url.TrimEnd('/') + '/v1/models'; $null = Invoke-WebRequest -Uri $testUrl -Method GET -Headers @{Authorization='Bearer '+$key} -TimeoutSec 5 -ErrorAction Stop -UseBasicParsing; Write-Host '  LLM API reachable' } " ^
-      "  catch { Write-Host ('  [!] LLM API unreachable: ' + $_.Exception.Message) } " ^
-      "} elseif ($key) { Write-Host '  [!] KB_LLM_BASE_URL not set, skipping API check' }"
-) else (
-    echo   [^^!] .env not found. LLM API key not configured.
-    echo   AI classification will not work.
-)
+powershell -NoProfile -File "%PROJECT_DIR%scripts\check_llm.ps1" -ProjectDir "%PROJECT_DIR%"
 
 REM ============================================================
 REM  Step 5: 启动 Qdrant（自动检测 + 自动安装）
@@ -145,7 +134,7 @@ if exist "!QDRANT_TMP!" (
 
 REM 检查检测结果
 if "!QDRANT_RESULT!"=="API_ALREADY_RUNNING" (
-    echo   Qdrant is already running (API responding on port 6333)
+    echo   Qdrant is already running ^(API responding on port 6333^)
     set "QDRANT_SKIP=0"
     goto :check_qdrant_health
 )
