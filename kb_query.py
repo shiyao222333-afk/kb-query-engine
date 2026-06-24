@@ -82,17 +82,7 @@ from text_pipeline import (
     _detect_language, detect_language, detect_encoding,
     extract_text, ocr_image,
 )
-from search_engine import (
-    search, answer,
-    _call_llm_api, _extract_json_block,
-    _build_synthesis_prompt, _render_report_html,
-    _renumber_citations, _dedup_chunks, _expand_chunks,
-    _chunk_has_table, _chunk_is_garbled,
-    _img_to_b64, _katex_css, _katex_post_process, _formula_to_html_spans,
-    _ensure_output_dir,
-    TABLE_SPLIT_THRESHOLD,
-    OUTPUT_DIR, LLM_BASE_URL, LLM_API_KEY, LLM_MODEL,
-)
+from search_engine import search, answer
 from classify_pipeline import (
     classify_document, auto_classify,
     _make_field, match_rules, match_all_rules,

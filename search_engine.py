@@ -36,13 +36,15 @@ from report_renderer import render_report_html
 _VALID_FILTER_KEYS = {"content_type","domain","knowledge_type","tags","temporal_nature","epistemic_status","lifecycle","is_personal","trust_score_min"}
 
 
-def _build_qdrant_filter(facet_filter: dict) -> dict:
-    """从 facet_filter 构建 Qdrant 过滤条件（must 数组）。"""
+def _build_qdrant_filter(facet_filter: dict) -> tuple:
+    """从 facet_filter 构建 Qdrant 过滤条件（must 数组）。
+    返回 (filter_dict, warnings_list)。"""
     if not facet_filter:
-        return None
+        return None, []
     _invalid_keys = set(facet_filter.keys()) - _VALID_FILTER_KEYS
+    warnings = []
     if _invalid_keys:
-        print(f"[Search] facet_filter invalid keys (ignored): {_invalid_keys}")
+        warnings.append(f"facet_filter 无效键（已忽略）: {_invalid_keys}")
     must_conditions = []
 
     def _add_match(key, vals):
@@ -74,7 +76,7 @@ def _build_qdrant_filter(facet_filter: dict) -> dict:
             "range": {"gte": facet_filter["trust_score_min"]}
         })
 
-    return {"must": must_conditions} if must_conditions else None
+    return {"must": must_conditions} if must_conditions else None, warnings
 
 
 def _query_qdrant_rrf(
@@ -94,58 +96,53 @@ def _query_qdrant_rrf(
         print(f"[Search] 稀疏查询向量生成失败（降级为纯稠密搜索）: {e}")
 
     # ── 搜索 Qdrant（原生混合查询：稠密 + 稀疏 → RRF 融合）──
-    try:
-        prefetch = []
-        if sparse_query:
-            prefetch.append({
-                "query": {"indices": sparse_query[0], "values": sparse_query[1]},
-                "using": "bm25",
-                "limit": top_k * 2,
-            })
+    prefetch = []
+    if sparse_query:
         prefetch.append({
-            "query": query_vec,
-            "using": "dense",
+            "query": {"indices": sparse_query[0], "values": sparse_query[1]},
+            "using": "bm25",
             "limit": top_k * 2,
         })
+    prefetch.append({
+        "query": query_vec,
+        "using": "dense",
+        "limit": top_k * 2,
+    })
 
-        query_body = {
-            "prefetch": prefetch,
-            "query": {"fusion": "rrf"},
-            "limit": top_k,
-            "with_payload": True,
-        }
-        if qdrant_filter:
-            query_body["filter"] = qdrant_filter
-            query_body["params"] = {"acorn": {"enable": True, "max_selectivity": 0.4}}
+    query_body = {
+        "prefetch": prefetch,
+        "query": {"fusion": "rrf"},
+        "limit": top_k,
+        "with_payload": True,
+    }
+    if qdrant_filter:
+        query_body["filter"] = qdrant_filter
+        query_body["params"] = {"acorn": {"enable": True, "max_selectivity": 0.4}}
 
-        resp = requests.post(
-            f"{QDRANT_URL}/collections/{collection}/points/query",
-            json=query_body,
-            timeout=30,
-        )
-        resp.raise_for_status()
-        results = resp.json()["result"]["points"]
+    resp = requests.post(
+        f"{QDRANT_URL}/collections/{collection}/points/query",
+        json=query_body,
+        timeout=30,
+    )
+    resp.raise_for_status()
+    results = resp.json()["result"]["points"]
 
-        # 后过滤
-        if score_threshold and score_threshold > 0:
-            filtered = [r for r in results if r.get("score", 0) >= score_threshold]
-            if filtered:
-                results = filtered
+    # 后过滤（0 是有效阈值，所以用 is not None）
+    if score_threshold is not None:
+        results = [r for r in results if r.get("score", 0) >= score_threshold]
 
-        # 重排序
+    # 重排序
+    try:
+        if RERANK_ENABLED:
+            results = rerank_results(query=query, results=results,
+                                   model=RERANK_MODEL, top_n=RERANK_TOP_N)
+    except Exception as e:
+        print(f"[Search] 重排序失败: {e}，尝试简单重排序")
         try:
-            if RERANK_ENABLED:
-                results = rerank_results(query=query, results=results,
-                                       model=RERANK_MODEL, top_n=RERANK_TOP_N)
-        except Exception as e:
-            print(f"[Search] 重排序失败: {e}，尝试简单重排序")
-            try:
-                results = rerank_results_simple(query, results, top_n=RERANK_TOP_N)
-            except Exception as e2:
-                print(f"[Search] 简单重排序也失败: {e2}，使用原始排序")
-        return results
-    except Exception:
-        raise
+            results = rerank_results_simple(query, results, top_n=RERANK_TOP_N)
+        except Exception as e2:
+            print(f"[Search] 简单重排序也失败: {e2}，使用原始排序")
+    return results
 
 
 def search(
@@ -233,7 +230,7 @@ def search(
         return {"ok": False, "error": f"嵌入查询失败: {e}"}
 
     # 构建过滤条件（分面过滤）
-    qdrant_filter = _build_qdrant_filter(facet_filter)
+    qdrant_filter, filter_warnings = _build_qdrant_filter(facet_filter)
 
     # ── 搜索 Qdrant（原生混合查询：稠密 + 稀疏 → RRF 融合）──
     try:
@@ -313,7 +310,8 @@ def search(
         "ok": True,
         "query": query,
         "total": len(chunks),
-        "chunks": chunks
+        "chunks": chunks,
+        "warnings": filter_warnings if filter_warnings else [],
     }
 
 
@@ -348,13 +346,16 @@ def _call_llm_api(messages: list, base_url: str = None, api_key: str = None, mod
 
 
 def _sanitize_html(text: str) -> str:
-    """简单 HTML 白名单过滤（防御 XSS）。"""
-    # 移除危险标签
-    dangerous_tags = r'<(script|iframe|object|embed|form|input|button)[^>]*>.*?</\1>'
-    text = re.sub(dangerous_tags, '', text, flags=re.DOTALL | re.IGNORECASE)
-    # 移除危险属性（on* 事件处理器）
-    text = re.sub(r' on\w+="[^"]*"', '', text, flags=re.IGNORECASE)
-    text = re.sub(r" on\w+='[^']*'", '', text, flags=re.IGNORECASE)
+    """HTML 白名单过滤（防御 XSS）。"""
+    # 移除危险标签（包含自闭合形式，如 <script/> <iframe/>）
+    dangerous_tags = r'<(script|iframe|object|embed|form|button|style|link|meta|applet|frame|frameset|base)\b[^>]*/?>'
+    text = re.sub(dangerous_tags, '', text, flags=re.IGNORECASE)
+    # 移除危险属性（on* 事件处理器 — 双引号/单引号/无引号）
+    text = re.sub(r'\s+on\w+\s*=\s*"[^"]*"', '', text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+on\w+\s*=\s*'[^']*'", '', text, flags=re.IGNORECASE)
+    text = re.sub(r'\s+on\w+\s*=\s*[^\s>]+', '', text, flags=re.IGNORECASE)
+    # 移除 javascript: 协议
+    text = re.sub(r'(?i)\bjavascript\s*:', 'blocked:', text)
     return text
 
 
@@ -362,10 +363,22 @@ def _renumber_citations(synthesis: str, citation_keys: list) -> tuple[str, list[
     """
     正则提取回答中实际使用的引用编号，重编号为连续 1~N。
     返回 (重编号后文本, 实际使用的原始引用索引列表(1-based))。
+    
+    E6 修复：先保护 LaTeX 公式块（$$...$$ 和 $...$），避免误替换公式内的数字。
     """
+    # ── 保护 LaTeX 块 ──
+    latex_blocks = []
+    def _save_latex(m):
+        latex_blocks.append(m.group(0))
+        return f"\x00LTX{len(latex_blocks)-1}\x00"
+
+    # 保护 $$...$$ 块（多行公式）
+    text = re.sub(r'\$\$.*?\$\$', _save_latex, synthesis, flags=re.DOTALL)
+    # 保护 $...$ 行内公式
+    text = re.sub(r'\$(?:\\.|[^$])+?\$', _save_latex, text)
 
     # 兼容多种格式：[引用5] [引用 5] 引用5 引用 5
-    used_raw = re.findall(r'\[?引用\s*(\d+)\]?', synthesis)
+    used_raw = re.findall(r'\[?引用\s*(\d+)\]?', text)
     if not used_raw:
         return synthesis, []
 
@@ -393,7 +406,15 @@ def _renumber_citations(synthesis: str, citation_keys: list) -> tuple[str, list[
         else:
             return f"引用{new_num}"
 
-    new_text = re.sub(r'\[?引用\s*(\d+)\]?', _replace, synthesis)
+    new_text = re.sub(r'\[?引用\s*(\d+)\]?', _replace, text)
+
+    # ── 还原 LaTeX 块 ──
+    def _restore_latex(m):
+        idx = int(m.group(1))
+        return latex_blocks[idx] if idx < len(latex_blocks) else m.group(0)
+
+    new_text = re.sub(r'\x00LTX(\d+)\x00', _restore_latex, new_text)
+
     return new_text, used
 
 

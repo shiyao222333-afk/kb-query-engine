@@ -318,9 +318,13 @@ def render_report_html(
         if images_list:
             imgs_parts = []
             for img in images_list:
-                if not (img and os.path.isfile(img)):
+                if not img:
                     continue
-                b64 = img_to_b64(img, max_w=700)
+                # P1-2 fix: 相对路径转换为绝对路径（与 img_to_b64 保持一致）
+                img_path = img if os.path.isabs(img) else os.path.join(PROJECT_DIR, img)
+                if not os.path.isfile(img_path):
+                    continue
+                b64 = img_to_b64(img_path, max_w=700)
                 if b64:
                     imgs_parts.append(f'<div class="ev-img-wrap"><img src="{b64}" class="evidence-img"></div>')
             if imgs_parts:
