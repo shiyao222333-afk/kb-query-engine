@@ -294,10 +294,6 @@ WATCH_V2_AUTO_RETRY_DELAY = _yaml_or_env(
     "watch_v2.failure_strategies.auto_retry_delay", "KB_WATCH_V2_AUTO_RETRY_DELAY", 5, cast=int,
     validator=lambda v: None if v >= 1 else "must be >= 1",
 )
-WATCH_V2_INFRA_RETRY_INTERVAL = _yaml_or_env(
-    "watch_v2.failure_strategies.infra_retry_interval", "KB_WATCH_V2_INFRA_RETRY_INTERVAL", 30, cast=int,
-    validator=lambda v: None if v >= 5 else "must be >= 5",
-)
 WATCH_V2_DLQ_TTL_DAYS = _yaml_or_env(
     "watch_v2.failure_strategies.dlq_ttl_days", "KB_WATCH_V2_DLQ_TTL_DAYS", 30, cast=int,
     validator=lambda v: None if v >= 0 else "must be >= 0",

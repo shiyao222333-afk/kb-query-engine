@@ -1001,6 +1001,7 @@ def _process_file(filepath: str, cancel_event: threading.Event = None):
             return
 
         # 摄入
+        metadata["needs_review"] = needs_review  # 写入 Qdrant payload，供 UI 待审核标签页展示
         ingest_result, should_retry, retry_count = _do_ingest(
             full_text, metadata, field_sources, overall_conf,
             filepath, filename, retry_count, cancel_event)
@@ -1079,7 +1080,7 @@ def _process_file_with_timeout(filepath: str):
                 try:
                     _queued_files.add(filepath)  # 记录到队列集合
                     _queue.put(filepath, timeout=WATCH_V2_QUEUE_PUT_TIMEOUT)
-                except Empty:
+                except Full:
                     log_activity(
                         action="watch_v2_requeue_failed",
                         detail=f"超时后重新入队失败: {filename}",
@@ -1119,7 +1120,30 @@ class WatchHandlerV2(FileSystemEventHandler):
         try:
             _queued_files.add(filepath)  # 记录到队列集合
             self.queue.put(filepath, timeout=WATCH_V2_QUEUE_PUT_TIMEOUT)
-        except Empty:
+        except Full:
+            with _stats_lock: _watch_stats["skipped"] += 1
+            log_activity(
+                action="watch_v2_queue_full",
+                detail=f"队列已满，丢弃文件: {filename}",
+                source=filename,
+            )
+
+    def on_moved(self, event):
+        """处理文件剪切粘贴到 inbox/ 的事件。"""
+        if event.is_directory:
+            return
+        if self.stop_event.is_set():
+            return
+        # event.dest_path 是文件移动到的新位置（inbox/ 里）
+        filepath = event.dest_path
+        filename = os.path.basename(filepath)
+        if _is_temp_file(filename):
+            with _stats_lock: _watch_stats["skipped"] += 1
+            return
+        try:
+            _queued_files.add(filepath)
+            self.queue.put(filepath, timeout=WATCH_V2_QUEUE_PUT_TIMEOUT)
+        except Full:
             with _stats_lock: _watch_stats["skipped"] += 1
             log_activity(
                 action="watch_v2_queue_full",
@@ -1218,12 +1242,12 @@ def _processing_loop_v2(queue: Queue, stop_event: threading.Event):
         if not _is_write_complete(filepath):
             time.sleep(1)
             # 文件可能在等待期间被删除（竞态保护）
-            if os.path.isfile(filepath):
-                try:
-                    _queued_files.add(filepath)  # 记录到队列集合
-                    queue.put(filepath, timeout=WATCH_V2_QUEUE_PUT_TIMEOUT)
-                except Empty:
-                    pass
+        if os.path.isfile(filepath):
+            try:
+                _queued_files.add(filepath)  # 记录到队列集合
+                queue.put(filepath, timeout=WATCH_V2_QUEUE_PUT_TIMEOUT)
+            except Full:
+                pass
             continue
 
         # 处理文件
@@ -1246,9 +1270,9 @@ def _scan_existing_files_v2(queue: Queue):
 
     for fp in sorted(files):
         try:
-            _queued_files.add(filepath)  # 记录到队列集合
+            _queued_files.add(fp)  # 记录到队列集合
             queue.put(fp, timeout=WATCH_V2_QUEUE_PUT_TIMEOUT)
-        except Empty:
+        except Full:
             with _stats_lock: _watch_stats["skipped"] += 1
 
 
@@ -1284,7 +1308,7 @@ def _rescue_orphaned_files(queue: Queue):
             _queued_files.add(filepath)  # 记录到队列集合
             queue.put(filepath, timeout=WATCH_V2_QUEUE_PUT_TIMEOUT)
             rescued += 1
-        except Empty:
+        except Full:
             break  # 队列满，下次循环再试
     if rescued > 0:
         log_activity(
@@ -1325,7 +1349,7 @@ def _recover_retry_files(queue: Queue, stop_event: threading.Event):
             try:
                 _queued_files.add(filepath)  # 记录到队列集合
                 queue.put(filepath, timeout=WATCH_V2_QUEUE_PUT_TIMEOUT)
-            except Empty:
+            except Full:
                 pass
 
 
@@ -1748,7 +1772,7 @@ def retry_file_v2(filename: str) -> bool:
                 source=filename,
             )
             return True
-        except Empty as e:
+        except Full as e:
             log_activity(
                 action="watch_v2_manual_retry_failed",
                 detail=f"手动重试入队失败 (队列满): {filename}",
