@@ -11,7 +11,6 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from qconst import QDRANT_URL
 from text_pipeline import _text_hash, _detect_language
 from config.classifications import normalize_facet_values
 
