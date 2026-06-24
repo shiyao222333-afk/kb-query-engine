@@ -165,8 +165,8 @@ def _query_qdrant_rrf(
             except Exception as e2:
                 print(f"[Search] 简单重排序也失败: {e2}，使用原始排序")
         return results
-    except Exception as e:
-        raise e
+    except Exception:
+        raise
 
 
 def _img_tag(img_path: str, max_w: int = 700) -> str:
@@ -303,6 +303,10 @@ def search(
     # 默认值从 pipe_cfg.yaml 读取（参数显式传入时优先）
     if top_k is None:
         top_k = SEARCH_TOP_K
+    if top_k < 1:
+        top_k = 1
+    if top_k > 100:
+        top_k = 100
     if score_threshold is None:
         score_threshold = SEARCH_SCORE_THRESHOLD
     if model is None:
