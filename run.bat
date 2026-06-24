@@ -134,7 +134,7 @@ REM 检查检测结果
 if "!QDRANT_RESULT!"=="API_ALREADY_RUNNING" (
     echo   Qdrant is already running ^(API responding on port 6333^)
     set "QDRANT_SKIP=0"
-    goto :check_qdrant_health
+    goto :skip_qdrant
 )
 
 if not "!QDRANT_RESULT!"=="" (
@@ -198,7 +198,7 @@ set /a QDRANT_RETRY=0
 :retry_qdrant
 timeout /t 2 /nobreak > nul
 set /a QDRANT_RETRY+=1
-curl.exe -s -f --connect-timeout 2 "http://127.0.0.1:6333/readyz" >NUL 2>NUL
+curl.exe -s --connect-timeout 2 -o NUL "http://127.0.0.1:6333/health" 2>NUL
 if %ERRORLEVEL% EQU 0 (
     echo   Qdrant healthy ^(port 6333^)
     goto :skip_qdrant
