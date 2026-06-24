@@ -146,6 +146,14 @@ SEARCH_SCORE_THRESHOLD = _yaml_or_env(
     "search.score_threshold", "KB_SEARCH_SCORE_THRESHOLD", 0.3, cast=float,
     validator=lambda v: None if 0 <= v <= 1 else "must be 0-1",
 )
+SEARCH_CHUNKS_PER_DOC = _yaml_or_env(
+    "search.chunks_per_doc", "KB_SEARCH_CHUNKS_PER_DOC", 3, cast=int,
+    validator=lambda v: None if 1 <= v <= 10 else "must be 1-10",
+)
+FACET_CACHE_TTL = _yaml_or_env(
+    "search.facet_cache_ttl", "KB_FACET_CACHE_TTL", 30, cast=int,
+    validator=lambda v: None if 0 <= v <= 300 else "must be 0-300",
+)
 
 # ── 重排序 ──
 RERANK_ENABLED = _yaml_or_env(
@@ -324,6 +332,8 @@ def _print_summary():
     print(f"  embed.dim               = {EMBED_DIM}")
     print(f"  search.top_k            = {SEARCH_TOP_K}")
     print(f"  search.score_threshold  = {SEARCH_SCORE_THRESHOLD}")
+    print(f"  search.chunks_per_doc   = {SEARCH_CHUNKS_PER_DOC}")
+    print(f"  search.facet_cache_ttl  = {FACET_CACHE_TTL}s")
     print(f"  rerank.enabled          = {RERANK_ENABLED}")
     print(f"  rerank.top_n            = {RERANK_TOP_N}")
     print(f"  ingest.skip_duplicates  = {INGEST_SKIP_DUPLICATES}")

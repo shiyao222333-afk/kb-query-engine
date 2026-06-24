@@ -8,6 +8,8 @@ embed:
 search:
   top_k: 5
   score_threshold: 0.3
+  chunks_per_doc: 3
+  facet_cache_ttl: 30
   rerank:
     enabled: true
     model: qwen3-embedding:4b

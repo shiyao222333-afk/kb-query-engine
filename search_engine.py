@@ -11,12 +11,14 @@ Extracted from kb_query.py (A4 refactor).
 import requests
 import os
 import re
+import time
 from collections import defaultdict
 
 from qconst import (
     QDRANT_URL, DEFAULT_COLLECTION, PROJECT_DIR,
     _check_qdrant, EMBED_MODEL,
-    SEARCH_TOP_K, SEARCH_SCORE_THRESHOLD,
+    SEARCH_TOP_K, SEARCH_SCORE_THRESHOLD, SEARCH_CHUNKS_PER_DOC,
+    FACET_CACHE_TTL,
     RERANK_ENABLED, RERANK_MODEL, RERANK_TOP_N,
     TABLE_SPLIT_THRESHOLD,
 )
@@ -291,20 +293,27 @@ def search(
             "rerank_score":   r.get("rerank_score", None),
         })
 
-    # ── v0.8.0: Grouping API — 按 doc_id 分组去重，每文档只保留最佳 chunk ──
+    # ── v0.8.0 / Q1 fix: 按 doc_id 分组，每文档保留 Top-N chunks ──
     if chunks:
         doc_groups = {}
         for c in chunks:
             did = c["doc_id"]
-            if did not in doc_groups or c["score"] > doc_groups[did]["score"]:
-                doc_groups[did] = c
-            # 统计该文档在结果中出现的 chunk 数
-            doc_groups[did]["_chunks_in_results"] = doc_groups[did].get("_chunks_in_results", 0) + 1
-        grouped = sorted(doc_groups.values(), key=lambda c: c["score"], reverse=True)
-        # 附加分组元信息
-        for c in grouped:
-            c["group_chunks_count"] = c.pop("_chunks_in_results", 1)
-        chunks = grouped
+            if did not in doc_groups:
+                doc_groups[did] = {"best_score": c["score"], "chunks": [], "total_in_results": 0}
+            doc_groups[did]["total_in_results"] += 1
+            if c["score"] > doc_groups[did]["best_score"]:
+                doc_groups[did]["best_score"] = c["score"]
+            doc_groups[did]["chunks"].append(c)
+        # 每组内按分数降序取 top-N
+        result = []
+        for did, g in doc_groups.items():
+            sorted_chunks = sorted(g["chunks"], key=lambda x: x["score"], reverse=True)
+            for ch in sorted_chunks[:SEARCH_CHUNKS_PER_DOC]:
+                ch["group_chunks_count"] = g["total_in_results"]
+                result.append((g["best_score"], ch))
+        # 按 best_score 降序排列
+        result.sort(key=lambda x: x[0], reverse=True)
+        chunks = [ch for _, ch in result]
 
     return {
         "ok": True,
@@ -345,17 +354,77 @@ def _call_llm_api(messages: list, base_url: str = None, api_key: str = None, mod
     return resp.json()["choices"][0]["message"]["content"]
 
 
+# ── O2 fix: 白名单标签/属性（替代黑名单，防御 XSS）──
+_ALLOWED_TAGS = {
+    # 结构
+    "p", "br", "hr", "div", "span",
+    # 标题
+    "h1", "h2", "h3", "h4", "h5", "h6",
+    # 文本格式
+    "strong", "em", "b", "i", "u", "del", "ins", "sub", "sup", "mark",
+    # 列表
+    "ul", "ol", "li", "dl", "dt", "dd",
+    # 代码/引用
+    "code", "pre", "blockquote",
+    # 表格
+    "table", "thead", "tbody", "tfoot", "tr", "th", "td",
+    # 链接/媒体
+    "a", "img",
+    # 描述列表
+    "details", "summary",
+}
+
+# 白名单属性（按标签）
+_ALLOWED_ATTRS = {
+    "*": {"class", "id", "title", "lang", "dir"},          # 所有标签
+    "a": {"href", "target", "rel"},                         # 链接
+    "img": {"src", "alt", "width", "height", "loading"},    # 图片
+    "td": {"colspan", "rowspan"},                           # 表格
+    "th": {"colspan", "rowspan"},
+}
+
+# 危险协议
+_DANGEROUS_PROTOS = re.compile(r'(?i)\b(javascript|data)\s*:')
+
+
 def _sanitize_html(text: str) -> str:
-    """HTML 白名单过滤（防御 XSS）。"""
-    # 移除危险标签（包含自闭合形式，如 <script/> <iframe/>）
-    dangerous_tags = r'<(script|iframe|object|embed|form|button|style|link|meta|applet|frame|frameset|base)\b[^>]*/?>'
-    text = re.sub(dangerous_tags, '', text, flags=re.IGNORECASE)
-    # 移除危险属性（on* 事件处理器 — 双引号/单引号/无引号）
+    """白名单过滤 HTML（防御 XSS）——只保留安全标签和属性。"""
+    # Step 1: 提取所有标签
+    tag_pat = re.compile(r'</?([a-zA-Z][a-zA-Z0-9]*)\b([^>]*)(/?)>')
+
+    def _filter_tag(m: re.Match) -> str:
+        tag = m.group(1).lower()
+        attrs_raw = m.group(2)
+        self_close = m.group(3)  # '/' if self-closing
+
+        if tag not in _ALLOWED_TAGS:
+            return ""  # 删除标签
+
+        # Step 2: 过滤属性
+        allowed_set = _ALLOWED_ATTRS.get(tag, set()) | _ALLOWED_ATTRS["*"]
+        safe_attrs = []
+        if attrs_raw.strip():
+            attr_pat = re.compile(r'([a-zA-Z][a-zA-Z0-9_-]*)\s*=\s*("[^"]*"|\'[^\']*\'|[^\s>]+)')
+            for am in attr_pat.finditer(attrs_raw):
+                aname = am.group(1).lower()
+                aval = am.group(2).strip("'\"")
+                if aname not in allowed_set:
+                    continue
+                # href/src 危险协议检查
+                if aname in ("href", "src") and _DANGEROUS_PROTOS.search(aval):
+                    continue
+                safe_attrs.append((aname, aval))
+
+        attrs_str = " ".join(f'{k}="{v}"' for k, v in safe_attrs)
+        if attrs_str:
+            attrs_str = " " + attrs_str
+        return f"<{tag}{attrs_str}{self_close}>"
+
+    text = tag_pat.sub(_filter_tag, text)
+    # Step 3: 移除残留的独立 on* 事件属性（如有遗漏）
     text = re.sub(r'\s+on\w+\s*=\s*"[^"]*"', '', text, flags=re.IGNORECASE)
     text = re.sub(r"\s+on\w+\s*=\s*'[^']*'", '', text, flags=re.IGNORECASE)
     text = re.sub(r'\s+on\w+\s*=\s*[^\s>]+', '', text, flags=re.IGNORECASE)
-    # 移除 javascript: 协议
-    text = re.sub(r'(?i)\bjavascript\s*:', 'blocked:', text)
     return text
 
 
@@ -680,6 +749,19 @@ def get_facet_stats(collection: str = DEFAULT_COLLECTION) -> dict:
     if not _check_qdrant():
         return {"ok": False, "error": "Qdrant 未运行"}
 
+    # ── P1 fix: TTL 缓存，避免每次仪表盘刷新都全量 scroll ──
+    _cache = getattr(get_facet_stats, "_cache", None)
+    if _cache is not None and _cache.get("collection") == collection:
+        cache_age = time.time() - _cache["ts"]
+        if cache_age < FACET_CACHE_TTL:
+            # 快速校验：points_count 是否变化（有新增/删除时跳过缓存）
+            try:
+                info = requests.get(f"{QDRANT_URL}/collections/{collection}", timeout=3)
+                if info.status_code == 200 and info.json()["result"]["points_count"] == _cache["pts"]:
+                    return _cache["data"]
+            except Exception:
+                pass  # Qdrant 不可用，走完整 scroll
+
     try:
         # 获取 points_count
         info = requests.get(f"{QDRANT_URL}/collections/{collection}", timeout=5)
@@ -688,7 +770,9 @@ def get_facet_stats(collection: str = DEFAULT_COLLECTION) -> dict:
 
         total_pts = info.json()["result"]["points_count"]
         if total_pts == 0:
-            return {"ok": True, "total_points": 0, "facets": {}, "meta": {}}
+            result = {"ok": True, "total_points": 0, "facets": {}, "meta": {}}
+            get_facet_stats._cache = {"ts": time.time(), "pts": 0, "collection": collection, "data": result}
+            return result
 
         facets = {}
         meta_stats = {}
@@ -758,11 +842,13 @@ def get_facet_stats(collection: str = DEFAULT_COLLECTION) -> dict:
         meta_stats["personal_count"] = personal_n
         meta_stats["archived_count"] = archived_n
 
-        return {
+        result = {
             "ok": True,
             "total_points": total_pts,
             "facets": facets,
             "meta": meta_stats,
         }
+        get_facet_stats._cache = {"ts": time.time(), "pts": total_pts, "collection": collection, "data": result}
+        return result
     except Exception as e:
         return {"ok": False, "error": str(e)}
