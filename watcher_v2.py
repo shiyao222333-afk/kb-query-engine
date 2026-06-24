@@ -61,6 +61,7 @@ from text_pipeline import (
 from classify_pipeline import classify_document
 from qconst import QDRANT_URL, OLLAMA_URL, DEFAULT_COLLECTION, CONFIDENCE_LOW, CONFIDENCE_HIGH
 from utils.activity_log import log_activity
+import kb_query
 
 # ═══════════════════════════════════════════
 # 路径定义
@@ -797,12 +798,14 @@ def _do_classify(full_text: str, filepath: str, filename: str,
     metadata["source_path"] = filepath
     metadata["ingestion_source"] = "watch_v2"
 
-    if overall_conf < CONFIDENCE_LOW:
+    # 置信度路由（三档）
+    needs_review, should_dlq = kb_query.route_by_confidence(
+        overall_conf, CONFIDENCE_LOW, CONFIDENCE_HIGH)
+    if should_dlq:
         _handle_failure(filepath, filename, "classify",
                         f"置信度过低 ({overall_conf:.2f} < {CONFIDENCE_LOW})", retry_count)
         return None, None, overall_conf, False, False, retry_count
 
-    needs_review = overall_conf < CONFIDENCE_HIGH
     return metadata, field_sources, overall_conf, needs_review, False, retry_count
 
 
@@ -810,11 +813,9 @@ def _do_ingest(full_text: str, metadata: dict, field_sources: dict,
                overall_conf: float, filepath: str, filename: str,
                retry_count: int, cancel_event: threading.Event) -> tuple:
     """摄入知识库。返回 (ingest_result, should_retry, new_retry_count)。
-    
+
     ingest_result=None 表示摄入失败。
     """
-    import kb_query
-
     if cancel_event is not None and cancel_event.is_set():
         return None, False, retry_count
 

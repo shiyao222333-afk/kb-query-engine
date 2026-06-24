@@ -401,15 +401,7 @@ def page_ingest():
             # 置信度路由（三档，阈值从 pipe_cfg.yaml 读取）
             _conf_low = CONFIDENCE_LOW
             _conf_high = CONFIDENCE_HIGH
-            if overall_conf >= _conf_high:
-                needs_review = False
-                dlq = False
-            elif overall_conf >= _conf_low:
-                needs_review = True
-                dlq = False
-            else:
-                needs_review = False
-                dlq = True
+            needs_review, dlq = kb_query.route_by_confidence(overall_conf, _conf_low, _conf_high)
 
             if dlq:
                 import time

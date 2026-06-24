@@ -64,6 +64,19 @@ from qdrant_client import (
     _ensure_collection, create_collection, list_collections,
     clear_collection, delete_collection, get_embed_models, has_any_data,
 )
+def route_by_confidence(overall_conf: float, conf_low: float, conf_high: float) -> tuple:
+    """
+    置信度三档路由。
+    返回 (needs_review, should_dlq)。
+    """
+    if overall_conf >= conf_high:
+        return False, False
+    elif overall_conf >= conf_low:
+        return True, False
+    else:
+        return False, True
+
+
 from text_pipeline import (
     _embed, _chunk_text, _text_hash, _extract_images, _ensure_images_dir,
     _detect_language, detect_language, detect_encoding,
