@@ -28,7 +28,7 @@ function Get-EnvQdrantPath {
     param($PrjDir)
     $envFile = Join-Path $PrjDir ".env"
     if (Test-Path $envFile) {
-        # 逐行读取，避免 -Raw 的 ^ 只匹配文件开头的问题
+        # 修复：管道返回值必须赋值给变量，return 在 ForEach-Object 中只退出当前迭代
         $path = Get-Content $envFile | ForEach-Object {
             if ($_ -match '^QDRANT_PATH=(.+)$') {
                 $Matches[1].Trim()
@@ -100,15 +100,6 @@ if ($Action -eq "detect") {
         if (Test-Path $localPath) { $candidates += $localPath }
     }
 
-    # 1d2. 常见手动安装位置（用户自定义路径）
-    $commonPaths = @(
-        Join-Path $env:USERPROFILE "qdrant\qdrant.exe",
-        Join-Path $env:ProgramFiles "qdrant\qdrant.exe"
-    )
-    foreach ($p in $commonPaths) {
-        if (Test-Path $p) { $candidates += $p }
-    }
-
     # 1e. 有限递归搜索（使用环境变量，通用不依赖具体机器）
     #     搜索根目录：ProgramFiles, LOCALAPPDATA, USERPROFILE, APPDATA
     #     递归深度：2（兼顾覆盖率和速度）
@@ -131,46 +122,8 @@ if ($Action -eq "detect") {
         }
     }
 
-
-    # 1f. 动态磁盘搜索（搜索所有本地磁盘的常见安装位置）
-    #     方法：使用 [System.IO.DriveInfo]::GetDrives() 获取所有本地磁盘
-    #     检查：<磁盘根>\qdrant\qdrant.exe
-    try {
-        $drives = [System.IO.DriveInfo]::GetDrives() | Where-Object { $_.DriveType -eq "Fixed" -and $_.IsReady }
-        foreach ($drive in $drives) {
-            $driveRoot = $drive.RootDirectory.FullName.TrimEnd("\\")
-            # 1f-1. 直接检查 <磁盘>\qdrant\qdrant.exe
-            $directPath = Join-Path "$driveRoot" "qdrant\qdrant.exe"
-            if (Test-Path $directPath) {
-                Write-Host "    [detect] Found Qdrant on $driveRoot : $directPath"
-                $candidates += $directPath
-            }
-        }
-    } catch {
-        Write-Host "  [WARN] Dynamic disk search failed: $_"
-    }
-
-    # 1g. 去重并写结果文件
-    # 1g. 去重并写结果文件
     # 1f. 去重并写结果文件
     $candidates = $candidates | Select-Object -Unique
-
-    # 文件完整性检查（防止坏文件 — qdrant.exe 正常约 20-30MB）
-    $validCandidates = @()
-    foreach ($c in $candidates) {
-        try {
-            $fileSize = (Get-Item $c -ErrorAction Stop).Length
-            if ($fileSize -gt 10MB) {
-                $validCandidates += $c
-            } else {
-                Write-Host "  [WARN] 跳过损坏的 qdrant.exe: $c (大小: $([math]::Round($fileSize/1KB, 1)) KB，正常应 > 10MB)"
-            }
-        } catch {
-            Write-Host "  [WARN] 无法检查文件: $c"
-        }
-    }
-    $candidates = $validCandidates
-
     if ($candidates.Count -gt 0) {
         Write-DetectResult $candidates[0]
         exit 0
@@ -282,25 +235,30 @@ if ($Action -eq "health") {
         exit 1
     }
 
-    # 进程存在，用 Test-NetConnection 检测端口（比 TcpClient 可靠）
+    # 进程存在，轮询 TcpClient 直到 HTTP 就绪
     for ($i = 1; $i -le $MaxRetries; $i++) {
-        $conn = Test-NetConnection -ComputerName "127.0.0.1" -Port 6333 -InformationLevel Quiet -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
-        if ($conn -eq $true) {
-            # 再用 HTTP 请求验证真的是 Qdrant（不是别的程序占了端口）
-            try {
-                $resp = Invoke-WebRequest -Uri "http://127.0.0.1:6333/collections" -TimeoutSec 3 -UseBasicParsing -ErrorAction Stop
-                if ($resp.StatusCode -eq 200) {
-                    if ($MaxRetries -gt 1) {
-                        Write-Host "  Qdrant healthy (port 6333)"
-                    }
-                    Write-DetectResult "HEALTHY"
-                    exit 0
-                }
-            } catch {
-                # 端口可连接但不是 Qdrant，继续等待
+        $connected = $false
+        try {
+            $tcp = New-Object System.Net.Sockets.TcpClient
+            $iar = $tcp.BeginConnect("127.0.0.1", 6333, $null, $null)
+            $wait = $iar.AsyncWaitHandle.WaitOne(2000)
+            if ($wait) {
+                $tcp.EndConnect($iar) | Out-Null
+                $connected = $true
             }
+            $tcp.Close()
+        } catch {}
+
+        if ($connected) {
+            # 只在多轮轮询时才输出"就绪"消息（单次检查安静通过）
+            if ($MaxRetries -gt 1) {
+                Write-Host "  Qdrant healthy (port 6333)"
+            }
+            Write-DetectResult "HEALTHY"
+            exit 0
         }
 
+        # 进度消息 — 只在多轮轮询时显示
         if ($MaxRetries -gt 1) {
             Write-Host "  Waiting for Qdrant... ($i/$MaxRetries)"
         }
@@ -316,143 +274,5 @@ if ($Action -eq "health") {
     exit 1
 }
 
-# ─────────────────────────────────────────────
-# 4. 启动 Qdrant（检测 + 启动 + 健康检查）
-#    参数: -ProjectDir 项目目录
-#          -MaxRetries 健康检查最大重试次数（默认 30）
-#          -RetryDelay 重试间隔秒数（默认 2）
-#    退出码: 0 = 启动成功且健康, 1 = 启动失败
-#
-#    流程: 检测 Qdrant → 若未运行则启动 → 轮询直到健康
-# ─────────────────────────────────────────────
-if ($Action -eq "start") {
-    # 4a. 检测 Qdrant（复用 detect 逻辑）
-    $exePath = ""
-    $alreadyRunning = $false
-
-    try {
-        $proc = Get-Process qdrant -ErrorAction Stop
-        # 进程存在，检查健康
-        try {
-            $resp = Invoke-WebRequest -Uri "http://127.0.0.1:6333/collections" `
-                -Method GET -TimeoutSec 3 -UseBasicParsing -ErrorAction Stop
-            if ($resp.StatusCode -eq 200) {
-                $alreadyRunning = $true
-            }
-        } catch {
-            # 进程存在但不响应 → 杀掉僵尸
-            Write-Host "  Qdrant process exists but not responding. Killing zombie..."
-            taskkill /F /IM qdrant.exe 2>NUL
-            Start-Sleep -Seconds 2
-        }
-    } catch {
-        # 进程不存在，继续
-    }
-
-    if ($alreadyRunning) {
-        Write-Host "  Qdrant is already running and healthy."
-        Write-DetectResult "ALREADY_RUNNING"
-        exit 0
-    }
-
-    # 4b. 未运行 → 查找可执行文件
-    if (-not $exePath) {
-        # 从 .env 读取
-        if ($ProjectDir) {
-            $envPath = Get-EnvQdrantPath -PrjDir $ProjectDir
-            if ($envPath -and (Test-Path $envPath)) {
-                $exePath = $envPath
-            }
-        }
-
-        # PATH 中查找
-        if (-not $exePath) {
-            try {
-                $exePath = (Get-Command qdrant -ErrorAction Stop).Source
-            } catch { $exePath = $null }
-        }
-
-        # 项目本地目录
-        if (-not $exePath -and $ProjectDir) {
-            $localPath = Join-Path $ProjectDir "qdrant\qdrant.exe"
-            if (Test-Path $localPath) { $exePath = $localPath }
-        }
-
-        # 常见手动安装位置
-        if (-not $exePath) {
-            $commonPaths = @(
-                Join-Path $env:USERPROFILE "qdrant\qdrant.exe",
-                Join-Path $env:ProgramFiles "qdrant\qdrant.exe"
-            )
-            foreach ($p in $commonPaths) {
-                if (Test-Path $p) { $exePath = $p; break }
-            }
-        }
-    }
-
-    if (-not $exePath) {
-        Write-Host "  [ERROR] Qdrant executable not found. Cannot start."
-        Write-Host "  Please run: $ProjectDir\scripts\qdrant_helper.ps1 -Action install -ProjectDir $ProjectDir"
-        Write-DetectResult "NOT_FOUND"
-        exit 1
-    }
-
-    # 4c. 启动 Qdrant
-    $qdrantDir = Split-Path $exePath -Parent
-    $logFile = Join-Path $ProjectDir "qdrant.log"
-    Write-Host "  Starting Qdrant: $exePath"
-    Write-Host "  Log file: $logFile"
-
-    # 构建启动参数并启动（使用 splatting 避免引号解析问题）
-    $procArgs = @{
-        FilePath = $exePath
-        WindowStyle = "Hidden"
-        RedirectStandardOutput = $logFile
-    }
-    if (Test-Path (Join-Path $qdrantDir "config\config.yaml")) {
-        $cfg = Join-Path $qdrantDir "config\config.yaml"
-        $procArgs['ArgumentList'] = @('--config-path', $cfg)
-    }
-    Start-Process @procArgs
-    Write-Host "  Qdrant process started."
-
-    # 4d. 健康检查 — 轮询直到就绪
-    $maxRetries = if ($MaxRetries -gt 0) { $MaxRetries } else { 30 }
-    $retryDelay = if ($RetryDelay -gt 0) { $RetryDelay } else { 2 }
-
-    for ($i = 1; $i -le $maxRetries; $i++) {
-        Start-Sleep -Seconds $retryDelay
-        try {
-            $resp = Invoke-WebRequest -Uri "http://127.0.0.1:6333/collections" `
-                -Method GET -TimeoutSec 3 -UseBasicParsing -ErrorAction Stop
-            if ($resp.StatusCode -eq 200) {
-                Write-Host "  Qdrant started successfully (healthy after $(($i-1) * $retryDelay) seconds)."
-                Write-DetectResult "STARTED"
-                exit 0
-            }
-        } catch {
-            # 还没就绪，继续等待
-        }
-        if ($maxRetries -gt 3) {
-            Write-Host "  Waiting for Qdrant... ($i/$maxRetries)"
-        }
-    }
-
-    # 超时：启动失败
-    Write-Host "  [ERROR] Qdrant did not become healthy within $($maxRetries * $retryDelay) seconds."
-    Write-Host "  Check log file: $logFile"
-    if (Test-Path $logFile) {
-        Write-Host "  Last 10 lines of log:"
-        Get-Content $logFile -Tail 10 | ForEach-Object { Write-Host "    $_" }
-    }
-    Write-DetectResult "START_FAILED"
-    exit 1
-}
-
-# start 动作已移除
-# Write-Host "  [ERROR] Unknown action: $Action"
+Write-Host "  [ERROR] Unknown action: $Action"
 exit 1
-
-
-
-
