@@ -41,7 +41,7 @@ if not exist "venv\Scripts\python.exe" (
 REM 关键包导入测试
 echo   Verifying packages...
 set "PKG_OK=1"
-venv\Scripts\python.exe -c "import nicegui, qdrant_client, openai, pypdf, docx, watchdog, jieba, yaml, dotenv" 2>NUL
+venv\Scripts\python.exe -c "import nicegui, qdrant_client, openai, pypdf, docx, watchdog, jieba, yaml, dotenv, paddle, paddleocr" 2>NUL
 if %ERRORLEVEL% NEQ 0 (
     echo   [WARNING] Some packages are missing.
     echo   Please run: install.ps1
@@ -113,7 +113,7 @@ if exist "%PROJECT_DIR%.env" (
       "$key=''; $url=''; Get-Content '%PROJECT_DIR%.env' | ForEach-Object { if ($_ -match '^KB_LLM_API_KEY=(.+)$') { $key=$Matches[1] } elseif ($_ -match '^KB_LLM_BASE_URL=(.+)$') { $url=$Matches[1] } }; " ^
       "if ($key) { Write-Host '  LLM API key configured' } else { Write-Host '  [!] LLM API key not set' }; " ^
       "if ($key -and $url) { " ^
-      "  try { $null = Invoke-WebRequest -Uri \"$url/models\" -Method GET -Headers @{Authorization='Bearer '+$key} -TimeoutSec 5 -ErrorAction Stop -UseBasicParsing; Write-Host '  LLM API reachable' } " ^
+      "  try { $testUrl = $url.TrimEnd('/') + '/v1/models'; $null = Invoke-WebRequest -Uri $testUrl -Method GET -Headers @{Authorization='Bearer '+$key} -TimeoutSec 5 -ErrorAction Stop -UseBasicParsing; Write-Host '  LLM API reachable' } " ^
       "  catch { Write-Host ('  [!] LLM API unreachable: ' + $_.Exception.Message) } " ^
       "} elseif ($key) { Write-Host '  [!] KB_LLM_BASE_URL not set, skipping API check' }"
 ) else (

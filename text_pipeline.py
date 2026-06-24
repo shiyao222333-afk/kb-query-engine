@@ -54,9 +54,11 @@ def _get_paddle():
             from paddleocr import PaddleOCR
             _paddle_ocr = PaddleOCR(lang='ch', ocr_version='PP-OCRv4', use_textline_orientation=True)
         except ImportError:
+            import sys
+            python_exe = sys.executable
             raise ImportError(
                 "PaddleOCR 未安装。运行: "
-                "D:/uv/tools/private-gpt/Scripts/python.exe -m pip install paddlepaddle paddleocr"
+                f"{python_exe} -m pip install paddlepaddle paddleocr"
             )
     return _paddle_ocr
 
@@ -75,10 +77,12 @@ def _get_structure_engine():
                 format_block_content=True,
             )
         except ImportError as e:
+            import sys
+            python_exe = sys.executable
             raise ImportError(
                 f"PPStructureV3 初始化失败: {e}\n"
                 f"请确保 paddlex[ocr] 已安装：\n"
-                f"  D:/uv/tools/private-gpt/Scripts/python.exe -m pip install 'paddlex[ocr]==3.7.0'"
+                f"  {python_exe} -m pip install 'paddlex[ocr]==3.7.0'"
             )
     return _structure_engine
 
