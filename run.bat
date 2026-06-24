@@ -18,26 +18,22 @@ REM ============================================================
 REM  Step 1: 清理旧进程
 REM ============================================================
 echo [1/8] Cleaning up stale processes...
-REM 杀所有占用 8080 的进程（不只第一个），杀完验证端口已释放
-set "PORT_FREE=0"
-for /l %%x in (1,1,5) do (
-    if "!PORT_FREE!"=="1" (
-        rem 端口已释放，跳过
-    ) else (
-        for /f "tokens=5" %%a in ('netstat -ano 2^>NUL ^| findstr ":8080 " ^| findstr "LISTENING"') do (
-            echo   Killing old process on port 8080 [PID %%a]
-            taskkill //PID %%a //F 2>NUL
-        )
-        timeout /t 1 /nobreak > nul
-        REM 验证端口是否已释放
-        netstat -ano 2>NUL | findstr ":8080 " | findstr "LISTENING" >NUL
-        if errorlevel 1 set "PORT_FREE=1"
-    )
+REM 使用 PowerShell 一次性杀死所有占用 8080 的进程，避免 batch 嵌套解析问题
+powershell -NoProfile -Command ^
+  "$killed=0; netstat -ano | Select-String ':8080.*LISTENING' | ForEach-Object {" ^
+  "  $p = ($_ -split '\s+')[-1];" ^
+  "  try { Stop-Process -Id $p -Force -ErrorAction Stop; Write-Host ('  Killed PID '+$p); $killed++ }" ^
+  "  catch { Write-Host ('  Cannot kill PID '+$p+' (may need admin)') }" ^
+  "}; if ($killed -eq 0) { Write-Host '  No stale processes on port 8080' }"
+REM 等待 2 秒确认端口释放
+timeout /t 2 /nobreak > nul
+netstat -ano 2>NUL | findstr ":8080 " | findstr "LISTENING" >NUL
+if errorlevel 1 (
+    echo   OK
+) else (
+    echo   [WARNING] Port 8080 still occupied. Run as Administrator if needed.
+    echo   OK
 )
-if "!PORT_FREE!"=="0" (
-    echo   [WARNING] Port 8080 still occupied after cleanup. May fail to bind.
-)
-echo   OK
 
 REM ============================================================
 REM  Step 2: 检查 Python 环境 + 依赖完整性 (P1-6)

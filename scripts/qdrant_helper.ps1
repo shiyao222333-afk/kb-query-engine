@@ -41,38 +41,17 @@ function Get-EnvQdrantPath {
 # 1. 检测 Qdrant
 # ─────────────────────────────────────────────
 if ($Action -eq "detect") {
-    # 1a. 检查 API 端口（Qdrant 是否已在运行）
-    #      已运行则不需要找二进制文件，直接写结果文件
-    #      用 .NET TcpClient 做端口检查，彻底避免 PowerShell stdout 污染
-    $apiAlive = $false
+    # 1a. 检查 qdrant.exe 进程是否在运行（唯一不会撒谎的检测方式）
+    #     TcpClient + curl 组合存在假阳性问题（端口可能被其他程序占用、
+    #     或 Qdrant 在崩溃边缘短暂响应，但随后立即不可用）
+    #     Get-Process qdrant 如果返回进程 → Qdrant 100% 在运行
     try {
-        $tcp = New-Object System.Net.Sockets.TcpClient
-        $iar = $tcp.BeginConnect("127.0.0.1", 6333, $null, $null)
-        $wait = $iar.AsyncWaitHandle.WaitOne(2000)
-        if ($wait) {
-            $tcp.EndConnect($iar) | Out-Null
-            $apiAlive = $true
-        }
-        $tcp.Close()
-    } catch {}
-
-    # 端口通了再验证 Qdrant HTTP 响应
-    # 必须同时满足 TcpClient 端口通 + curl.exe /healthz 返回内容含 "ok"
-    if ($apiAlive) {
-        $apiAlive = $false
-        try {
-            $resp = & curl.exe -s --connect-timeout 3 --max-time 5 "http://127.0.0.1:6333/healthz" 2>$null
-            if ($LASTEXITCODE -eq 0 -and $resp -match "ok") {
-                $apiAlive = $true
-            }
-        } catch {}
-    }
-
-    if ($apiAlive) {
+        $proc = Get-Process qdrant -ErrorAction Stop
         Write-DetectResult "API_ALREADY_RUNNING"
         exit 0
+    } catch {
+        # qdrant.exe 未运行，继续搜索二进制文件
     }
-    # API 未响应，继续查找二进制文件
     $candidates = @()
 
     # 1b. 读取 .env 中的 QDRANT_PATH（用户手动指定路径）
@@ -211,12 +190,26 @@ log_level: INFO
 }
 
 # ─────────────────────────────────────────────
-# 3. 健康检查 — 轮询 Qdrant 端口直到响应（使用 TcpClient，避免 stdout 污染）
+# 3. 健康检查 — 轮询 Qdrant 端口直到响应
 #    参数: -MaxRetries 最大重试次数（默认 30）
 #          -RetryDelay 重试间隔秒数（默认 2）
 #    退出码: 0 = 健康, 1 = 超时未响应
+#
+#    流程: 先检查 qdrant.exe 进程是否存在
+#          ↓ 不存在 → 立即失败（不浪费 60 秒轮询）
+#          ↓ 存在   → TcpClient 轮询端口直到 HTTP 就绪
 # ─────────────────────────────────────────────
 if ($Action -eq "health") {
+    # 快速检查：qdrant.exe 进程是否在运行？
+    try {
+        $proc = Get-Process qdrant -ErrorAction Stop
+    } catch {
+        Write-Host "  [ERROR] Qdrant process not running. Cannot check health."
+        Write-DetectResult "UNHEALTHY"
+        exit 1
+    }
+
+    # 进程存在，轮询 TcpClient 直到 HTTP 就绪
     for ($i = 1; $i -le $MaxRetries; $i++) {
         $connected = $false
         try {
