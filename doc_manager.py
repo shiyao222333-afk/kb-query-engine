@@ -490,7 +490,15 @@ def get_document(doc_uid: str, collection: str = DEFAULT_COLLECTION) -> dict:
             })
 
         chunks.sort(key=lambda c: c["chunk_index"])
-        return {"ok": True, "doc_uid": doc_uid, "chunks": chunks}
+        # 从第一分块提取文档级元数据（全部 payload 字段）
+        metadata = {}
+        if all_points:
+            metadata = dict(all_points[0].get("payload", {}))
+            # 移除分块特有字段，保留文档级元数据
+            metadata.pop("chunk_index", None)
+            metadata.pop("text", None)
+            metadata.pop("images", None)
+        return {"ok": True, "doc_uid": doc_uid, "chunks": chunks, "metadata": metadata}
 
     except Exception as e:
         return {"ok": False, "error": str(e)}

@@ -49,26 +49,6 @@ def _delete_dlq_file(fp: str):
         os.unlink(fp)
 
 
-def _load_watch_dlq_files() -> list:
-    """【v1.0.0 废弃】旧版守望 DLQ 已迁移到统一收件箱，此函数返回空列表以保持兼容。"""
-    return []
-
-
-def _move_to_watch(fp: str) -> bool:
-    """【v1.0.0 废弃】改用 retry_file_v2() 从收件箱重试。"""
-    import shutil
-    # 尝试移回收件箱
-    if os.path.isfile(fp):
-        dst = os.path.join(INBOX_DIR, os.path.basename(fp))
-        try:
-            _ensure_inbox_dir()
-            shutil.move(fp, dst)
-            return True
-        except Exception:
-            pass
-    return False
-
-
 # ═══════════════════════════════════════════
 # v1.0.0: 统一收件箱函数
 # ═══════════════════════════════════════════
@@ -234,12 +214,21 @@ def _build_overview_tab():
     inbox_stats = _get_inbox_stats()
 
     review_count = 0
-    try:
-        review_result = kb_query.list_documents(collection=current, needs_review=True)
-        if review_result.get("ok"):
-            review_count = review_result.get("doc_count", 0)
-    except Exception:
-        pass
+    review_label = None
+
+    async def _load_review_count():
+        nonlocal review_count
+        try:
+            review_result = await asyncio.to_thread(kb_query.list_documents, collection=current, needs_review=True)
+            if review_result.get("ok"):
+                review_count = review_result.get("total", 0)
+                if review_label is not None:
+                    review_label.set_text(str(review_count))
+                    review_label.classes(remove="text-gray-400", add="text-orange-400" if review_count > 0 else "text-gray-400")
+        except Exception:
+            pass
+
+    asyncio.ensure_future(_load_review_count())
 
     # ═══════════════════════════════
     # Row 1: 统计卡片（5 列）
@@ -252,7 +241,7 @@ def _build_overview_tab():
 
         with ui.card().classes("flex-1 text-center p-4"):
             ui.label("⚠️").classes("text-3xl")
-            ui.label(str(review_count)).classes("text-2xl font-bold text-orange-400")
+            review_label = ui.label(str(review_count)).classes("text-2xl font-bold text-orange-400")
             ui.label("待审核").classes("text-sm text-gray-400")
 
         with ui.card().classes("flex-1 text-center p-4"):
@@ -275,6 +264,50 @@ def _build_overview_tab():
             ui.label("📚").classes("text-3xl")
             ui.label(str(len(collections))).classes("text-2xl font-bold")
             ui.label("知识库").classes("text-sm text-gray-400")
+
+
+    # ══════════════════════════════
+    # Row 1.5: 分面统计分布 (P2-3 修复)
+    # ══════════════════════════════
+    ui.separator()
+    ui.markdown("### 📊 分面分布")
+
+    # 创建容器用于异步更新
+    facet_containers = {}
+
+    async def _load_facet_stats():
+        """异步加载分面统计。"""
+        try:
+            result = await asyncio.to_thread(kb_query.get_facet_stats, current)
+            if result.get("ok"):
+                facets = result.get("facets", {})
+                for facet_name, counts in facets.items():
+                    if facet_name in facet_containers and counts:
+                        container = facet_containers[facet_name]
+                        container.clear()
+                        with container:
+                            # 显示前 5 个最常见的值
+                            sorted_items = sorted(counts.items(), key=lambda x: -x[1])[:5]
+                            for value, count in sorted_items:
+                                ui.label(f"  {value}: {count}").classes("text-xs text-gray-600")
+                            if len(counts) > 5:
+                                ui.label(f"  ... 还有 {len(counts) - 5} 种").classes("text-xs text-gray-500 italic")
+        except Exception as e:
+            ui.notify(f"分面统计加载失败: {e}", type="warning")
+
+    with ui.row().classes("w-full gap-4"):
+        for facet_name, facet_label in [
+            ("content_type", "内容类型"),
+            ("domain", "领域"),
+            ("temporal_nature", "时效属性"),
+            ("epistemic_status", "认知状态"),
+        ]:
+            with ui.card().classes("flex-1 p-3"):
+                ui.label(facet_label).classes("text-sm font-bold mb-2")
+                container = ui.column().classes("w-full")
+                facet_containers[facet_name] = container
+
+    asyncio.ensure_future(_load_facet_stats())
 
     # ═══════════════════════════════
     # Row 2: 快速入口按钮
@@ -475,13 +508,30 @@ def _build_browse_tab():
         doc_container.clear()
         batch_bar.clear()
 
+        current_page = 1
+        page_size = 20
+        total_pages = 1
+
+        def _go_prev():
+            nonlocal current_page
+            if current_page > 1:
+                current_page -= 1
+                asyncio.ensure_future(_load())
+
+        def _go_next():
+            nonlocal current_page, total_pages
+            if current_page < total_pages:
+                current_page += 1
+                asyncio.ensure_future(_load())
+
         async def _load():
+            nonlocal current_page, page_size, total_pages
             try:
                 result = await asyncio.to_thread(
                     kb_query.list_documents,
                     collection=STATE["active_collection"],
-                    page=1,
-                    page_size=500,  # 一次性加载全部用于客户端过滤
+                    page=current_page,
+                    page_size=page_size,
                 )
             except Exception as ex:
                 ui.notify(f"加载失败: {ex}", type="negative")
@@ -544,16 +594,28 @@ def _build_browse_tab():
                 ui.button("🗑️ 批量删除选中", on_click=lambda: _batch_delete(selected_ids, _refresh_browse)).props("color=red flat")
                 ui.label(f"已选 0/{len(filtered)}").classes("text-sm text-gray-500").bind_text_from(
                     selected_ids, backward=lambda s: f"已选 {len(s)}/{len(filtered)}"
-                ) if False else None
+                )
 
             # 文档卡片
             with doc_container:
                 for idx, d in enumerate(filtered):
                     _build_doc_card(d, idx, selected_ids, _refresh_browse)
 
-        asyncio.ensure_future(_load())
+            # 分页控件
+            total = result.get("total", 0)
+            _calc_pages = max(1, (total + page_size - 1) // page_size) if total else 1
+            total_pages = _calc_pages
 
-    # 搜索/过滤变更时自动刷新（debounce 处理在业务层）
+            with ui.row().classes("w-full justify-center items-center gap-4 mt-4"):
+                prev_btn = ui.button("◀ 上一页", on_click=_go_prev).props("flat")
+                if current_page <= 1:
+                    prev_btn.props("disabled")
+                ui.label(f"第 {current_page} 页 / 共 {total_pages} 页").classes("text-sm text-gray-500")
+                next_btn = ui.button("下一页 ▶", on_click=_go_next).props("flat")
+                if current_page >= total_pages:
+                    next_btn.props("disabled")
+
+        asyncio.ensure_future(_load())
     search_input.on("keydown.enter", lambda: _refresh_browse())
     ct_filter.on("update:model-value", lambda: _refresh_browse())
     domain_filter.on("update:model-value", lambda: _refresh_browse())
@@ -700,11 +762,12 @@ def _build_review_tab():
 
     review_container = ui.column().classes("w-full")
 
-    def _refresh_review():
+    async def _refresh_review():
         review_container.clear()
         with review_container:
             try:
-                result = kb_query.list_documents(
+                result = await asyncio.to_thread(
+                    kb_query.list_documents,
                     collection=STATE["active_collection"],
                     needs_review=True,
                 )
@@ -722,9 +785,9 @@ def _build_review_tab():
             for doc in docs:
                 _build_review_card(doc, _refresh_review)
 
-    _refresh_review()
+    asyncio.ensure_future(_refresh_review())
 
-    ui.button("🔄 刷新", on_click=_refresh_review).props("flat").classes("mt-2")
+    ui.button("🔄 刷新", on_click=lambda: asyncio.ensure_future(_refresh_review())).props("flat").classes("mt-2")
 
 
 def _build_review_card(doc: dict, on_refresh):
@@ -767,8 +830,8 @@ def _build_review_card(doc: dict, on_refresh):
                         {"needs_review": False},
                         collection=STATE["active_collection"],
                     )
-                    title = doc.get("title", "") or doc.get("source", "")
-                    log_activity("review_approve", doc_uid, title, STATE["active_collection"])
+                    doc_title = doc.get("title", "") or doc.get("source", "")
+                    log_activity("review_approve", doc_uid, doc_title, STATE["active_collection"])
                     ui.notify(f"✅ 已通过: {doc_uid[:12]}", type="positive")
                     on_refresh()
                 except Exception as ex:
@@ -784,8 +847,8 @@ def _build_review_card(doc: dict, on_refresh):
                         doc_uid,
                         collection=STATE["active_collection"],
                     )
-                    title = doc.get("title", "") or doc.get("source", "")
-                    log_activity("review_drop", doc_uid, title, STATE["active_collection"])
+                    doc_title = doc.get("title", "") or doc.get("source", "")
+                    log_activity("review_drop", doc_uid, doc_title, STATE["active_collection"])
                     ui.notify(f"已丢弃: {doc_uid[:12]}", type="positive")
                     on_refresh()
                 except Exception as ex:
@@ -979,6 +1042,17 @@ def _build_dlq_tab():
 
             ui.label(f"共 {len(json_items)} 条死信（置信度过低）").classes("text-sm text-gray-500 mb-2")
 
+            # 辅助函数：避免在循环中重复定义
+            def _make_edit_handler(item, refresh_callback):
+                def _handler():
+                    _show_dlq_edit_dialog(item, refresh_callback)
+                return _handler
+
+            def _make_upload_handler(item, refresh_callback):
+                def _handler():
+                    _show_dlq_upload_dialog(item, refresh_callback)
+                return _handler
+
             # ── 置信度过低 DLQ（JSON 格式）──
             for item in json_items:
                 confidence = item.get("confidence", 0)
@@ -1005,13 +1079,8 @@ def _build_dlq_tab():
                         ui.label(content).classes("text-xs text-gray-500 mt-1").style("white-space: pre-wrap")
 
                     with ui.row().classes("gap-2 mt-2"):
-                        async def _open_edit_dialog(item=item):
-                            _show_dlq_edit_dialog(item, _refresh_dlq)
-                        ui.button("✏️ 手动修正", on_click=_open_edit_dialog).props("color=blue flat")
-
-                        async def _open_upload_dialog(item=item):
-                            _show_dlq_upload_dialog(item, _refresh_dlq)
-                        ui.button("📎 重新上传", on_click=_open_upload_dialog).props("color=teal flat")
+                        ui.button("✏️ 手动修正", on_click=_make_edit_handler(item, _refresh_dlq)).props("color=blue flat")
+                        ui.button("📎 重新上传", on_click=_make_upload_handler(item, _refresh_dlq)).props("color=teal flat")
 
                         del_dialog = ui.dialog()
                         with del_dialog:
@@ -1235,24 +1304,16 @@ def page_doc_detail(doc_uid: str):
             ui.badge("⚠️ Qdrant 离线", color="red")
             return
 
-        # 加载文档元数据
+        # 加载文档元数据与分块（单次查询）
         collection = STATE["active_collection"]
-        meta_result = kb_query.list_documents(collection=collection, page=1, page_size=500)
-        doc_meta = None
-        if meta_result.get("ok"):
-            for d in meta_result["documents"]:
-                if d.get("doc_uid") == doc_uid:
-                    doc_meta = d
-                    break
+        chunk_result = kb_query.get_document(doc_uid, collection=collection)
+        chunks = chunk_result.get("chunks", []) if chunk_result.get("ok") else []
+        doc_meta = chunk_result.get("metadata", {}) if chunk_result.get("ok") else {}
 
         if not doc_meta:
             ui.markdown("### 📄 文档不存在")
             ui.label(f"未找到 doc_uid={doc_uid} 的记录，可能已被删除。").classes("text-gray-500")
             return
-
-        # 加载分块
-        chunk_result = kb_query.get_document(doc_uid, collection=collection)
-        chunks = chunk_result.get("chunks", []) if chunk_result.get("ok") else []
 
         # ════════════════════
         # 标题区

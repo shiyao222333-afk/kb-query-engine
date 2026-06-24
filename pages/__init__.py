@@ -7,7 +7,6 @@ Citrinitas · 熔知 — 页面模块包
   - ingest.py: 文档注入页面 (/)
   - search.py: 智能检索页面 (/search)
   - hub.py: 知识中枢页面 (/hub)
-  - manage.py: 文档管理页面 (/manage)
   - config.py: 引擎配置页面 (/config)
 """
 
@@ -23,10 +22,6 @@ def get_page_search():
 def get_page_hub():
     from .hub import page_hub
     return page_hub
-
-def get_page_manage():
-    from .manage import page_manage
-    return page_manage
 
 def get_page_config():
     from .config import page_config

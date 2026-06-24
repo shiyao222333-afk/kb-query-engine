@@ -1,6 +1,6 @@
 """
 KB Query Engine - 中文技术文档知识库问答系统
-版本: v0.9.0 — 守望文件夹自动摄入 + 混合检索 + 待审核队列
+版本: v1.0.0 — 守望文件夹自动摄入 + 混合检索 + 待审核队列
 
 架构:
   摄入: 图片/文本 → PaddleOCR/PPStructureV3 → 分块嵌入 → Qdrant
@@ -600,3 +600,47 @@ if __name__ == "__main__":
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
         parser.print_help()
+
+def get_facet_stats(collection: str = None) -> dict:
+    """获取分面统计分布（全量滚动统计）。"""
+    if collection is None:
+        collection = ACTIVE_COLLECTION
+
+    try:
+        facet_counts = {
+            "content_type": {},
+            "domain": {},
+            "temporal_nature": {},
+            "epistemic_status": {},
+        }
+
+        offset = None
+        while True:
+            points, offset = client.scroll(
+                collection_name=collection,
+                limit=1000,
+                offset=offset,
+                with_payload=True,
+                with_vectors=False,
+            )
+
+            if not points:
+                break
+
+            for point in points:
+                payload = point.payload
+                for facet in facet_counts:
+                    value = payload.get(facet, "unknown")
+                    if isinstance(value, list):
+                        for v in value:
+                            facet_counts[facet][v] = facet_counts[facet].get(v, 0) + 1
+                    else:
+                        facet_counts[facet][value] = facet_counts[facet].get(value, 0) + 1
+
+            if offset is None:
+                break
+
+        return {"ok": True, "facets": facet_counts}
+
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
