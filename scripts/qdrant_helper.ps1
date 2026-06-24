@@ -28,11 +28,13 @@ function Get-EnvQdrantPath {
     param($PrjDir)
     $envFile = Join-Path $PrjDir ".env"
     if (Test-Path $envFile) {
-        Get-Content $envFile | ForEach-Object {
+        # 逐行读取，避免 -Raw 的 ^ 只匹配文件开头的问题
+        $path = Get-Content $envFile | ForEach-Object {
             if ($_ -match '^QDRANT_PATH=(.+)$') {
-                return $Matches[1].Trim()
+                $Matches[1].Trim()
             }
-        }
+        } | Select-Object -First 1
+        if ($path) { return $path }
     }
     return $null
 }
@@ -131,32 +133,24 @@ if ($Action -eq "detect") {
 
 
     # 1f. 动态磁盘搜索（搜索所有本地磁盘的常见安装位置）
-    #     搜索模式：<磁盘根>\qdrant\qdrant.exe 或 <磁盘>\*\qdrant\qdrant.exe
-    #     深度：2（仅在磁盘根目录和一级子目录搜索，避免全盘扫描）
+    #     方法：使用 [System.IO.DriveInfo]::GetDrives() 获取所有本地磁盘
+    #     检查：<磁盘根>\qdrant\qdrant.exe
     try {
-        $drives = Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue | Where-Object { $_.Used -gt 0 } | Select-Object -ExpandProperty Root
+        $drives = [System.IO.DriveInfo]::GetDrives() | Where-Object { $_.DriveType -eq "Fixed" -and $_.IsReady }
         foreach ($drive in $drives) {
+            $driveRoot = $drive.RootDirectory.FullName.TrimEnd("\\")
             # 1f-1. 直接检查 <磁盘>\qdrant\qdrant.exe
-            $directPath = Join-Path $drive "qdrant\qdrant.exe"
+            $directPath = Join-Path "$driveRoot" "qdrant\qdrant.exe"
             if (Test-Path $directPath) {
+                Write-Host "    [detect] Found Qdrant on $driveRoot : $directPath"
                 $candidates += $directPath
-            }
-            # 1f-2. 搜索 <磁盘>\*\qdrant\qdrant.exe（一级子目录下的 qdrant）
-            try {
-                Get-ChildItem -Path $drive -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-                    $subPath = Join-Path $_.FullName "qdrant\qdrant.exe"
-                    if (Test-Path $subPath) {
-                        $candidates += $subPath
-                    }
-                }
-            } catch {
-                # 忽略权限错误
             }
         }
     } catch {
-        # 获取磁盘列表失败，跳过动态搜索
+        Write-Host "  [WARN] Dynamic disk search failed: $_"
     }
 
+    # 1g. 去重并写结果文件
     # 1g. 去重并写结果文件
     # 1f. 去重并写结果文件
     $candidates = $candidates | Select-Object -Unique
@@ -458,5 +452,7 @@ if ($Action -eq "start") {
 # start 动作已移除
 # Write-Host "  [ERROR] Unknown action: $Action"
 exit 1
+
+
 
 
