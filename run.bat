@@ -107,7 +107,7 @@ if %ERRORLEVEL% EQU 0 (
     echo   Install from: https://ollama.com
 )
 
-REM  LLM API 检查已移除 — 应用启动不依赖 LLM，运行时遇缺失会优雅降级
+REM  LLM API check removed -- app starts without LLM, degrades gracefully at runtime
 
 REM ============================================================
 REM  Step 5: 启动 Qdrant（自动检测 + 自动安装）
@@ -119,10 +119,9 @@ set "QDRANT_EXE="
 set "QDRANT_SKIP="
 
 REM 5a. 调用 qdrant_helper.ps1 检测 Qdrant
-REM     返回值：
-REM       - "API_ALREADY_RUNNING" → Qdrant 已在运行（API 端口有响应）
-REM       - "<path>"             → 找到 Qdrant 二进制文件
-REM       - ""                   → 未找到
+REM     Result: API_ALREADY_RUNNING = already serving on port
+REM             path-to-exe     = found binary
+REM             (empty)         = not found
 echo   Detecting Qdrant...
 powershell -NoProfile -ExecutionPolicy Bypass -File "%PROJECT_DIR%scripts\qdrant_helper.ps1" -Action detect -ProjectDir "%PROJECT_DIR%" >NUL 2>&1
 set "QDRANT_RESULT="
@@ -144,7 +143,7 @@ if not "!QDRANT_RESULT!"=="" (
     goto :launch_qdrant
 )
 
-REM 5b. 未检测到 → 询问用户是否自动安装
+REM 5b. 未检测到 -> 询问用户是否自动安装
 echo   [!] Qdrant not found on this system.
 echo   Citrinitas needs Qdrant for vector search.
 echo.
@@ -192,14 +191,14 @@ powershell -Command "!PS_CMD!"
 set "QDRANT_SKIP=0"
 
 REM ============================================================
-REM  Step 5b: Qdrant 健康检查 — 轮询 /health (P0-3)
+REM  Step 5b: Qdrant 健康检查 -- 轮询 /health (P0-3)
 REM ============================================================
 :check_qdrant_health
 set /a QDRANT_RETRY=0
 :retry_qdrant
 timeout /t 2 /nobreak > nul
 set /a QDRANT_RETRY+=1
-powershell -Command "try { (Invoke-WebRequest -Uri 'http://127.0.0.1:6333/readyz' -TimeoutSec 2 -UseBasicParsing).Content } catch { exit 1 }" >NUL 2>NUL
+curl.exe -s -f --connect-timeout 2 "http://127.0.0.1:6333/readyz" >NUL 2>NUL
 if %ERRORLEVEL% EQU 0 (
     echo   Qdrant healthy ^(port 6333^)
     goto :skip_qdrant
@@ -216,7 +215,7 @@ exit /b 1
 :skip_qdrant
 
 REM ============================================================
-REM  Step 6: 守望文件夹守护进程 (A4 — 由 main.py 内部启动)
+REM  Step 6: 守望文件夹守护进程 (A4 -- 由 main.py 内部启动)
 REM ============================================================
 echo.
 echo [6/8] Watch folder: enabled
@@ -264,7 +263,7 @@ echo   Web UI stopped.
 
 REM ============================================================
 REM 优雅关闭 (P2-4)
-REM 顺序：守望守护进程(随main退出) → Web UI(已退出) → Qdrant → (Ollama不关)
+REM      shutdown order: watch daemon(stops with main) -> Web UI(stopped) -> Qdrant -> (Ollama stays)
 REM ============================================================
 echo.
 echo Shutting down services...
