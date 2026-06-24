@@ -46,20 +46,18 @@ if ($Action -eq "detect") {
         $proc = Get-Process qdrant -ErrorAction Stop
         # 进程存在，做快速健康检查（2次重试，判断是否是僵尸）
         $healthy = $false
-        for ($i = 1; $i -le 2; $i++) {
+        for ($i = 1; $i -le 3; $i++) {
             try {
-                $tcp = New-Object System.Net.Sockets.TcpClient
-                $iar = $tcp.BeginConnect("127.0.0.1", 6333, $null, $null)
-                $wait = $iar.AsyncWaitHandle.WaitOne(1500)
-                if ($wait) {
-                    $tcp.EndConnect($iar) | Out-Null
-                    $tcp.Close()
+                # 用真正的 HTTP 请求检查 API 是否响应（而非仅 TCP 端口）
+                $resp = Invoke-WebRequest -Uri "http://127.0.0.1:6333/health" `
+                    -Method GET -TimeoutSec 3 -UseBasicParsing `
+                    -ErrorAction Stop
+                if ($resp.StatusCode -eq 200) {
                     $healthy = $true
                     break
                 }
-                $tcp.Close()
             } catch { }
-            if ($i -lt 2) { Start-Sleep -Seconds 1 }
+            if ($i -lt 3) { Start-Sleep -Seconds 1 }
         }
         if ($healthy) {
             Write-DetectResult "API_ALREADY_RUNNING"

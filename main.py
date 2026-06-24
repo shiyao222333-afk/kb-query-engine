@@ -121,11 +121,28 @@ def _serve_report(filename: str):
 # ── 主入口 ───────────────────────────────
 if __name__ in {"__main__", "__mp_main__"}:
     print(f"[启动] 检查 Qdrant: {kb_query.QDRANT_URL}/collections")
+    _qdrant_ok = False
     try:
         _test = _r.get(f"{kb_query.QDRANT_URL}/collections", timeout=5)
-        print(f"[启动] Qdrant 状态: {_test.status_code} -> {_test.ok}", flush=True)
+        if _test.status_code == 200:
+            print("[启动] ✅ Qdrant 连接正常", flush=True)
+            _qdrant_ok = True
+        else:
+            print(f"[启动] ⚠️ Qdrant 返回异常状态码: {_test.status_code}", flush=True)
     except Exception as _e:
-        print(f"[启动] ⚠️ Qdrant 未启动: {_e}", flush=True)
+        print(f"[启动] ❌ Qdrant 未启动或无法连接: {_e}", flush=True)
+
+    if not _qdrant_ok:
+        print("", flush=True)
+        print("=" * 60, flush=True)
+        print("  ❌ 无法连接到 Qdrant，Citrinitas 不能启动。", flush=True)
+        print("", flush=True)
+        print("  请确保 Qdrant 正在运行：", flush=True)
+        print("    1. 手动检查：打开 http://127.0.0.1:6333 看是否响应", flush=True)
+        print("    2. 或重新运行 run.bat（它会自动启动 Qdrant）", flush=True)
+        print("=" * 60, flush=True)
+        print("", flush=True)
+        sys.exit(1)
 
     # 在事件循环启动前刷新状态（阻塞主线程没问题，此时事件循环还没启动）
     print("[启动] 刷新系统状态（ui.run 前）…", flush=True)
