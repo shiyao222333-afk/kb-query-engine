@@ -8,10 +8,20 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
+$InformationPreference = "SilentlyContinue"
+$WarningPreference = "SilentlyContinue"
 
 # ─────────────────────────────────────────────
-# 0. 读取 .env 中的 QDRANT_PATH（用户手动指定）
+# 0. 结果输出函数（写临时文件，避免 stdout 污染）
 # ─────────────────────────────────────────────
+function Write-DetectResult {
+    param([string]$Result)
+    # 写到临时文件，run.bat 会读取这个文件
+    $tmpFile = Join-Path $env:TEMP "qdrant_detect_result.txt"
+    Set-Content -Path $tmpFile -Value $Result -Encoding UTF8
+}
+
 function Get-EnvQdrantPath {
     param($PrjDir)
     $envFile = Join-Path $PrjDir ".env"
@@ -30,17 +40,36 @@ function Get-EnvQdrantPath {
 # ─────────────────────────────────────────────
 if ($Action -eq "detect") {
     # 1a. 检查 API 端口（Qdrant 是否已在运行）
-    #      已运行则不需要找二进制文件，直接返回 "API_ALREADY_RUNNING"
+    #      已运行则不需要找二进制文件，直接写结果文件
+    #      用 .NET TcpClient 做端口检查，彻底避免 PowerShell stdout 污染
+    $apiAlive = $false
     try {
-        $healthResp = Invoke-WebRequest -Uri "http://localhost:6333" -Method GET -TimeoutSec 2 -ErrorAction Stop -UseBasicParsing
-        if ($healthResp.StatusCode -eq 200) {
-            Write-Output "API_ALREADY_RUNNING"
-            exit 0
+        $tcp = New-Object System.Net.Sockets.TcpClient
+        $iar = $tcp.BeginConnect("127.0.0.1", 6333, $null, $null)
+        $wait = $iar.AsyncWaitHandle.WaitOne(2000)
+        if ($wait) {
+            $tcp.EndConnect($iar) | Out-Null
+            $apiAlive = $true
         }
-    } catch {
-        # API 未响应，继续查找二进制文件
+        $tcp.Close()
+    } catch {}
+
+    # 端口通了再验证 HTTP 响应（用 curl.exe，不靠 PowerShell cmdlet）
+    if ($apiAlive) {
+        try {
+            $httpCode = & curl.exe -s -o NUL --connect-timeout 2 "http://127.0.0.1:6333" 2>&1
+            if ($LASTEXITCODE -eq 0) { $apiAlive = $true } else { $apiAlive = $false }
+        } catch {
+            # 端口通但 HTTP 无响应，也算 alive（可能 Qdrant 在但 HTTP 有点问题）
+            $apiAlive = $true
+        }
     }
 
+    if ($apiAlive) {
+        Write-DetectResult "API_ALREADY_RUNNING"
+        exit 0
+    }
+    # API 未响应，继续查找二进制文件
     $candidates = @()
 
     # 1b. 读取 .env 中的 QDRANT_PATH（用户手动指定路径）
@@ -85,15 +114,15 @@ if ($Action -eq "detect") {
         }
     }
 
-    # 1f. 去重并输出第一个找到的路径
+    # 1f. 去重并写结果文件
     $candidates = $candidates | Select-Object -Unique
     if ($candidates.Count -gt 0) {
-        Write-Output $candidates[0]
+        Write-DetectResult $candidates[0]
         exit 0
     }
 
     # 未找到
-    Write-Output ""
+    Write-DetectResult ""
     exit 1
 }
 
@@ -167,10 +196,10 @@ log_level: INFO
     Set-Content -Path $cfgPath -Value $defaultConfig -Encoding UTF8
     Write-Host "  Config written to: $cfgPath"
 
-    # 验证安装（跳过 --version 检查，PowerShell 7 有 bug）
+    # 验证安装
     if (Test-Path $exePath) {
         Write-Host "  Qdrant $versionNoV installed successfully."
-        Write-Output $exePath
+        Write-DetectResult $exePath
         exit 0
     } else {
         Write-Host "  [ERROR] Installed binary not found."
