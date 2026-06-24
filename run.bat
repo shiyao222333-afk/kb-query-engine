@@ -186,6 +186,18 @@ echo   Config:      pipe_cfg.yaml ^(tuneables^) + .env ^(secrets^)
 echo   Watch dir:   %PROJECT_DIR%data\watch\
 
 REM ============================================================
+REM  Step 7b: 模型预热（PaddleOCR + Ollama 嵌入）
+REM ============================================================
+echo.
+echo [7b/8] Warming up models ^(PaddleOCR + Ollama^)...
+venv\Scripts\python.exe warmup.py
+if %ERRORLEVEL% EQU 0 (
+    echo   Models warmed up successfully.
+) else (
+    echo   [!] Model warmup failed ^(some models may be unavailable^)
+)
+
+REM ============================================================
 REM  Step 8: 启动 Web UI
 REM ============================================================
 echo.

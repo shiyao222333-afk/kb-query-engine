@@ -550,7 +550,7 @@ def extract_text(file_path: str) -> dict:
         except Exception as e:
             return {"ok": False, "error": f"解析 SRT 失败: {e}"}
 
-    # ── PDF 格式 ──
+    # ── PDF 格式（混合模式：先提取文本，失败则用 OCR）──
     if ext == ".pdf":
         try:
             import pdfplumber
@@ -561,13 +561,77 @@ def extract_text(file_path: str) -> dict:
                     if page_text:
                         parts.append(page_text)
                 text = "\n\n".join(parts)
-            if not text.strip():
-                return {"ok": False, "error": "PDF 无文本内容（可能是扫描件，需要 OCR）"}
-            return {"ok": True, "text": text, "chars": len(text), "meta": {"format": "pdf", "pages": len(pdf.pages)}}
+
+            # 如果提取到足够文本，直接返回
+            if text.strip() and len(text.strip()) > 100:
+                return {"ok": True, "text": text, "chars": len(text), "meta": {"format": "pdf", "pages": len(pdf.pages), "ocr": False}}
+
+            # 文本太少，尝试 OCR（逐页转图片后识别）
+            logger.info(f"[PDF] 文本提取不足，启用 OCR: {file_path}")
+            ocr_parts = []
+            page_count = 0
+            try:
+                from pdf2image import convert_from_path
+                images = convert_from_path(file_path, dpi=200)
+                page_count = len(images)
+                for i, img in enumerate(images):
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                        img.save(tmp.name, "PNG")
+                        result = ocr_image(tmp.name)
+                        if result.get("ok") and result.get("text"):
+                            ocr_parts.append(f"--- 第 {i+1} 页 ---\n{result['text']}")
+                        os.unlink(tmp.name)
+            except ImportError:
+                # pdf2image 未安装，尝试用 pymupdf
+                try:
+                    import fitz  # pymupdf
+                    doc = fitz.open(file_path)
+                    page_count = len(doc)
+                    for i, page in enumerate(doc):
+                        pix = page.get_pixmap(dpi=200)
+                        import tempfile
+                        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                            pix.save(tmp.name)
+                            result = ocr_image(tmp.name)
+                            if result.get("ok") and result.get("text"):
+                                ocr_parts.append(f"--- 第 {i+1} 页 ---\n{result['text']}")
+                            os.unlink(tmp.name)
+                except ImportError:
+                    return {"ok": False, "error": "PDF 无文本内容，且未安装 OCR 依赖（pdf2image 或 pymupdf）"}
+
+            if ocr_parts:
+                text = "\n\n".join(ocr_parts)
+                return {"ok": True, "text": text, "chars": len(text), "meta": {"format": "pdf", "pages": page_count, "ocr": True}}
+            return {"ok": False, "error": "PDF 无文本内容，OCR 也失败"}
+
         except ImportError:
             return {"ok": False, "error": "需要安装 pdfplumber：pip install pdfplumber"}
         except Exception as e:
             return {"ok": False, "error": f"解析 PDF 失败: {e}"}
+
+    # ── 图片格式：调用 OCR ──
+    if ext in (".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"):
+        try:
+            from text_pipeline import ocr_image
+        except ImportError:
+            from text_pipeline import ocr_image
+        result = ocr_image(file_path)
+        if not result.get("ok"):
+            return {"ok": False, "error": result.get("error", "OCR 识别失败")}
+        text = result.get("text", "")
+        if not text.strip():
+            return {"ok": False, "error": "OCR 识别结果为空"}
+        return {
+            "ok": True,
+            "text": text,
+            "chars": len(text),
+            "meta": {
+                "format": "image",
+                "ocr_model": result.get("model", "unknown"),
+                "ocr_conf": result.get("conf", 0.0),
+            }
+        }
 
     # ── 不支持的格式 ──
     return {"ok": False, "error": f"不支持的文件格式: {ext}"}
