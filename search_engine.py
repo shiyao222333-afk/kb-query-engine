@@ -244,10 +244,13 @@ def search(
     chunks = []
     for r in results:
         payload = r.get("payload", {})
+        # 容错：旧数据可能没有 title/source，做兜底填充
+        _title = payload.get("title") or payload.get("source") or ""
+        _source = payload.get("source") or ""
         chunks.append({
             "text":            payload.get("text", ""),
-            "title":           payload.get("title", ""),
-            "source":          payload.get("source", "未知"),
+            "title":           _title,
+            "source":          _source,
             "score":           round(r.get("score", 0), 4),
             "chunk_index":     payload.get("chunk_index", 0),
             "total_chunks":    payload.get("total_chunks", 0),
@@ -513,7 +516,7 @@ def _dedup_chunks(raw_chunks: list) -> list:
     # 按 source 分组
     groups: dict[str, list] = {}
     for c in raw_chunks:
-        src = c.get("source", "未知") or "未知"
+        src = c.get("source") or "未知"
         groups.setdefault(src, []).append(c)
 
     result = []
@@ -586,7 +589,7 @@ def _build_synthesis_prompt(query: str, chunks: list, table_split_threshold: int
 
     for c in chunks:
         text = c["text"]
-        src = c.get("source", "未知") or "未知"
+        src = c.get("source") or "未知"
 
         # 检测是否为管道表格
         pipe_lines = [l for l in text.split("\n") if l.strip().startswith("|")]

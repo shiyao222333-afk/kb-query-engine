@@ -309,7 +309,7 @@ def render_report_html(
         else:
             ref_tag = f'<span class="ref-tag">[引用{orig_num}]</span>'
         
-        src = c.get("source", "未知") or "未知"
+        src = c.get("source") or "未知"
         text_html = format_evidence_text(c["text"])
         score = c.get("score", 0)
         images_list = c.get("images", [])

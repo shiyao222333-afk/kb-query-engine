@@ -231,8 +231,8 @@ def search_by_doc_id(
             payload = p.get("payload", {})
             chunks.append({
                 "text":            payload.get("text", ""),
-                "title":           payload.get("title", ""),
-                "source":          payload.get("source", "未知"),
+                "title":           payload.get("title") or payload.get("source") or "",
+                "source":          payload.get("source") or "",
                 "chunk_index":     payload.get("chunk_index", 0),
                 "content_type":    payload.get("content_type", ""),
                 "domain":          payload.get("domain", []),
