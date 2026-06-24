@@ -272,5 +272,127 @@ if ($Action -eq "health") {
     exit 1
 }
 
+# ─────────────────────────────────────────────
+# 4. 启动 Qdrant（检测 + 启动 + 健康检查）
+#    参数: -ProjectDir 项目目录
+#          -MaxRetries 健康检查最大重试次数（默认 30）
+#          -RetryDelay 重试间隔秒数（默认 2）
+#    退出码: 0 = 启动成功且健康, 1 = 启动失败
+#
+#    流程: 检测 Qdrant → 若未运行则启动 → 轮询直到健康
+# ─────────────────────────────────────────────
+if ($Action -eq "start") {
+    # 4a. 检测 Qdrant（复用 detect 逻辑）
+    $exePath = ""
+    $alreadyRunning = $false
+
+    try {
+        $proc = Get-Process qdrant -ErrorAction Stop
+        # 进程存在，检查健康
+        try {
+            $resp = Invoke-WebRequest -Uri "http://127.0.0.1:6333/collections" `
+                -Method GET -TimeoutSec 3 -UseBasicParsing -ErrorAction Stop
+            if ($resp.StatusCode -eq 200) {
+                $alreadyRunning = $true
+            }
+        } catch {
+            # 进程存在但不响应 → 杀掉僵尸
+            Write-Host "  Qdrant process exists but not responding. Killing zombie..."
+            taskkill /F /IM qdrant.exe 2>NUL
+            Start-Sleep -Seconds 2
+        }
+    } catch {
+        # 进程不存在，继续
+    }
+
+    if ($alreadyRunning) {
+        Write-Host "  Qdrant is already running and healthy."
+        Write-DetectResult "ALREADY_RUNNING"
+        exit 0
+    }
+
+    # 4b. 未运行 → 查找可执行文件
+    if (-not $exePath) {
+        # 从 .env 读取
+        if ($ProjectDir) {
+            $envPath = Get-EnvQdrantPath -PrjDir $ProjectDir
+            if ($envPath -and (Test-Path $envPath)) {
+                $exePath = $envPath
+            }
+        }
+
+        # PATH 中查找
+        if (-not $exePath) {
+            try {
+                $exePath = (Get-Command qdrant -ErrorAction Stop).Source
+            } catch { $exePath = $null }
+        }
+
+        # 项目本地目录
+        if (-not $exePath -and $ProjectDir) {
+            $localPath = Join-Path $ProjectDir "qdrant\qdrant.exe"
+            if (Test-Path $localPath) { $exePath = $localPath }
+        }
+    }
+
+    if (-not $exePath) {
+        Write-Host "  [ERROR] Qdrant executable not found. Cannot start."
+        Write-Host "  Please run: $ProjectDir\scripts\qdrant_helper.ps1 -Action install -ProjectDir $ProjectDir"
+        Write-DetectResult "NOT_FOUND"
+        exit 1
+    }
+
+    # 4c. 启动 Qdrant
+    $qdrantDir = Split-Path $exePath -Parent
+    $logFile = Join-Path $ProjectDir "qdrant.log"
+    Write-Host "  Starting Qdrant: $exePath"
+    Write-Host "  Log file: $logFile"
+
+    # 构建启动参数并启动（使用 splatting 避免引号解析问题）
+    $procArgs = @{
+        FilePath = $exePath
+        WindowStyle = "Hidden"
+        RedirectStandardOutput = $logFile
+    }
+    if (Test-Path (Join-Path $qdrantDir "config\config.yaml")) {
+        $cfg = Join-Path $qdrantDir "config\config.yaml"
+        $procArgs['ArgumentList'] = @('--config-path', $cfg)
+    }
+    Start-Process @procArgs
+    Write-Host "  Qdrant process started."
+
+    # 4d. 健康检查 — 轮询直到就绪
+    $maxRetries = if ($MaxRetries -gt 0) { $MaxRetries } else { 30 }
+    $retryDelay = if ($RetryDelay -gt 0) { $RetryDelay } else { 2 }
+
+    for ($i = 1; $i -le $maxRetries; $i++) {
+        Start-Sleep -Seconds $retryDelay
+        try {
+            $resp = Invoke-WebRequest -Uri "http://127.0.0.1:6333/collections" `
+                -Method GET -TimeoutSec 3 -UseBasicParsing -ErrorAction Stop
+            if ($resp.StatusCode -eq 200) {
+                Write-Host "  Qdrant started successfully (healthy after $(($i-1) * $retryDelay) seconds)."
+                Write-DetectResult "STARTED"
+                exit 0
+            }
+        } catch {
+            # 还没就绪，继续等待
+        }
+        if ($maxRetries -gt 3) {
+            Write-Host "  Waiting for Qdrant... ($i/$maxRetries)"
+        }
+    }
+
+    # 超时：启动失败
+    Write-Host "  [ERROR] Qdrant did not become healthy within $($maxRetries * $retryDelay) seconds."
+    Write-Host "  Check log file: $logFile"
+    if (Test-Path $logFile) {
+        Write-Host "  Last 10 lines of log:"
+        Get-Content $logFile -Tail 10 | ForEach-Object { Write-Host "    $_" }
+    }
+    Write-DetectResult "START_FAILED"
+    exit 1
+}
+
 Write-Host "  [ERROR] Unknown action: $Action"
 exit 1

@@ -213,20 +213,14 @@ echo   Launching Qdrant...
 set "QDRANT_DIR="
 for %%p in ("!QDRANT_EXE!\..") do set "QDRANT_DIR=%%~fp"
 
-REM 构建启动命令（config 可选）
-set "PS_CMD=Start-Process -FilePath '!QDRANT_EXE!' -WindowStyle Hidden"
-if exist "!QDRANT_DIR!\config\config.yaml" (
-    set "PS_CMD=!PS_CMD! -ArgumentList '--config-path','!QDRANT_DIR!\config\config.yaml'"
-)
-powershell -Command "!PS_CMD!"
-set "QDRANT_SKIP=0"
-
-REM 健康检查 — 轮询 Qdrant 端口（TcpClient，无 curl.exe 依赖）
-powershell -NoProfile -ExecutionPolicy Bypass -File "%PROJECT_DIR%scripts\qdrant_helper.ps1" -Action health -MaxRetries 30 -RetryDelay 2
+REM 使用 qdrant_helper.ps1 start 动作启动 Qdrant（自动检测+启动+健康检查）
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PROJECT_DIR%scripts\qdrant_helper.ps1" -Action start -ProjectDir "%PROJECT_DIR%" -MaxRetries 30 -RetryDelay 2
 if !ERRORLEVEL! NEQ 0 (
+    echo   [ERROR] Failed to start Qdrant. Check qdrant.log for details.
     pause
     exit /b 1
 )
+set "QDRANT_SKIP=0"
 goto :skip_qdrant
 
 :skip_qdrant
@@ -261,6 +255,28 @@ if %ERRORLEVEL% EQU 0 (
 ) else (
     echo   [^^!] Model warmup failed ^(some models may be unavailable^)
 )
+
+REM ============================================================
+REM  Step 7c: 预热后重新检查 Qdrant（防止预热期间崩溃）
+REM ============================================================
+echo.
+echo [7c/8] Re-checking Qdrant after warmup...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PROJECT_DIR%scripts\qdrant_helper.ps1" -Action health -MaxRetries 3 -RetryDelay 2
+if !ERRORLEVEL! NEQ 0 (
+    echo   [WARNING] Qdrant is not responding after warmup.
+    echo   Attempting to restart Qdrant...
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%PROJECT_DIR%scripts\qdrant_helper.ps1" -Action start -ProjectDir "%PROJECT_DIR%" -MaxRetries 15 -RetryDelay 2
+    if !ERRORLEVEL! NEQ 0 (
+        echo   [ERROR] Failed to restart Qdrant.
+        echo   Check qdrant.log for details (last 20 lines):
+        if exist "%PROJECT_DIR%qdrant.log" (
+            powershell -NoProfile -Command "Get-Content '%PROJECT_DIR%qdrant.log' -Tail 20"
+        )
+        pause
+        exit /b 1
+    )
+)
+echo   Qdrant OK after warmup.
 
 REM ============================================================
 REM  Step 8: 启动 Web UI

@@ -139,25 +139,24 @@ if __name__ in {"__main__", "__mp_main__"}:
             time.sleep(5)
 
     if not _qdrant_ok:
-        # 尝试通过 qdrant_helper.ps1 启动 Qdrant
+        # 尝试通过 qdrant_helper.ps1 启动 Qdrant（真正启动，不只是检测）
         import subprocess
-        _ps = "D:\\citrinitas\\scripts\\qdrant_helper.ps1"
-        _proj = "D:\\citrinitas"
+        _ps = os.path.join(PROJECT_DIR, "scripts", "qdrant_helper.ps1")
         print("[启动] 尝试启动 Qdrant...", flush=True)
         try:
-            _r2 = subprocess.run(
+            _r = subprocess.run(
                 ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                 "-File", _ps, "-Action", "detect", "-ProjectDir", _proj],
-                capture_output=True, text=True, timeout=30
+                 "-File", _ps, "-Action", "start", "-ProjectDir", PROJECT_DIR,
+                 "-MaxRetries", "30", "-RetryDelay", "2"],
+                capture_output=True, text=True, timeout=80
             )
-            _r3 = subprocess.run(
-                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                 "-File", _ps, "-Action", "health", "-MaxRetries", "30", "-RetryDelay", "2"],
-                capture_output=True, text=True, timeout=70
-            )
-            if _r3.returncode == 0:
+            if _r.returncode == 0:
                 print("[启动] ✅ Qdrant 已启动", flush=True)
                 _qdrant_ok = True
+            else:
+                print(f"[启动] Qdrant 启动失败，返回码: {_r.returncode}", flush=True)
+                if _r.stdout:
+                    print(f"[启动] 输出: {_r.stdout[-500:]}", flush=True)
         except Exception as _e2:
             print(f"[启动] 自动启动 Qdrant 失败: {_e2}", flush=True)
 
