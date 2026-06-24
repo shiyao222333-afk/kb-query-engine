@@ -12,10 +12,9 @@ net session >nul 2>&1
 if %ERRORLEVEL% EQU 0 goto :got_admin
 
 REM 没有管理员权限 → 自动请求提升
-echo.
 echo [权限] 检测到需要管理员权限，正在请求 UAC 提升...
 echo [权限] 请点击"是"允许此程序以管理员身份运行。
-powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+powershell -NoProfile -Command "$p='%~f0';$w='%~dp0';Start-Process -FilePath $p -Verb RunAs -WorkingDirectory $w"
 exit /b
 
 :got_admin
