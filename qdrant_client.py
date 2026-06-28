@@ -127,10 +127,15 @@ def list_collections() -> dict:
                 info = requests.get(f"{QDRANT_URL}/collections/{name}", timeout=5).json()
                 cfg = info.get("result", {}).get("config", {}).get("params", {}).get("vectors", {})
                 pts = info.get("result", {}).get("points_count", 0)
+                # Qdrant >=1.x 将向量配置嵌套在 dense/sparse 下
+                if isinstance(cfg, dict):
+                    dim = cfg.get("size") or (cfg.get("dense", {}).get("size")) or "?"
+                else:
+                    dim = "?"
                 result.append({
                     "name": name,
                     "points": pts,
-                    "dim": cfg.get("size", "?") if cfg else "?",
+                    "dim": dim,
                 })
             except Exception:
                 result.append({"name": name, "points": "?", "dim": "?"})

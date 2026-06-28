@@ -45,9 +45,14 @@ def refresh_system_state():
                     data = resp.json().get("result", {})
                     cfg = data.get("config", {}).get("params", {}).get("vectors", {})
                     pts = data.get("points_count", 0)
+                    # Qdrant >=1.x 将向量配置嵌套在 dense/sparse 下
+                    if isinstance(cfg, dict):
+                        dim = cfg.get("size") or (cfg.get("dense", {}).get("size")) or "?"
+                    else:
+                        dim = "?"
                     STATE["stats"] = {
                         "points": pts,
-                        "dim": cfg.get("size", "?"),
+                        "dim": dim,
                         "collection": STATE["active_collection"],
                     }
                 else:
