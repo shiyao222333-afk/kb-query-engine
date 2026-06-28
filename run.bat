@@ -1,54 +1,56 @@
 @echo off
 REM ============================================================
-REM  Citrinitas · 熔知 - One-Click Launcher
+REM  Citrinitas - One-Click Launcher
 REM ============================================================
 chcp 65001 > nul
 
 REM ------------------------------------------------------------
-REM  管理员权限自动提升
+REM  Admin privilege auto-elevation
 REM ------------------------------------------------------------
-REM 检测当前是否已有管理员权限（net session 在非管理员下返回错误）
 net session >nul 2>&1
-if %ERRORLEVEL% EQU 0 goto :got_admin
+if %ERRORLEVEL% EQU 0 goto got_admin
 
-REM 没有管理员权限 → 自动请求提升
-echo [权限] 检测到需要管理员权限，正在请求 UAC 提升...
-echo [权限] 请点击"是"允许此程序以管理员身份运行。
+echo [ADMIN] Admin privileges required. Requesting UAC elevation...
+echo [ADMIN] Please click "Yes" to allow this program to run as administrator.
 powershell -NoProfile -Command "$p='%~f0';$w='%~dp0';Start-Process -FilePath $p -Verb RunAs -WorkingDirectory $w"
 exit /b
 
+REM ============================================================
+REM  Main routine (runs only with admin privileges)
+REM ============================================================
 :got_admin
 setlocal enabledelayedexpansion
 
 set "PROJECT_DIR=%~dp0"
-cd /d "%PROJECT_DIR%"
+REM  Remove trailing backslash to prevent \" from breaking PowerShell quotes
+if "%PROJECT_DIR:~-1%"=="\" set "PROJECT_DIR=%PROJECT_DIR:~0,-1%"
+cd /d "%PROJECT_DIR%\"
 
 echo.
 echo ============================================================
-echo    Citrinitas - 熔知  v1.0.0
+echo    Citrinitas v1.0.0
 echo ============================================================
 echo.
 
 REM ============================================================
-REM  Step 1: 清理旧进程（使用专用 PowerShell 脚本）
+REM  Step 1: Clean up stale processes
 REM ============================================================
 echo [1/8] Cleaning up stale processes...
-powershell -NoProfile -ExecutionPolicy Bypass -File "%PROJECT_DIR%scripts\port_cleanup.ps1" -Port 8080
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PROJECT_DIR%\scripts\port_cleanup.ps1" -Port 8080
 if %ERRORLEVEL% NEQ 0 (
-    echo   [ERROR] Could not free port 8080. Please kill the process manually.
-    echo   Run: taskkill /F /PID ^<pid^>
+    echo   [ERROR] Could not free port 8080.
     pause
-    exit /b 1
+    goto error_exit
 )
 echo   OK
 
-REM 1b. 清理残留的 qdrant.exe（防止僵尸进程导致检测误判）
+REM 1b. Kill any leftover qdrant.exe
 taskkill /F /IM qdrant.exe 2>NUL
 timeout /t 1 /nobreak >NUL
 
 
 REM ============================================================
-REM  Step 2: 检查 Python 环境 + 依赖完整性 (P1-6)
+REM  Step 2: Check Python environment
 REM ============================================================
 echo.
 echo [2/8] Checking Python environment...
@@ -57,236 +59,182 @@ if not exist "venv\Scripts\python.exe" (
     echo   [ERROR] Virtual environment not found.
     echo   Please run: install.ps1
     pause
-    exit /b 1
+    goto error_exit
 )
 
-REM 关键包导入测试
 echo   Verifying packages...
-set "PKG_OK=1"
 venv\Scripts\python.exe -c "import nicegui, qdrant_client, openai, pypdf, docx, watchdog, jieba, yaml, dotenv, paddle, paddleocr" 2>NUL
 if %ERRORLEVEL% NEQ 0 (
     echo   [WARNING] Some packages are missing.
     echo   Please run: install.ps1
-    set "PKG_OK=0"
 )
-if !PKG_OK! EQU 1 echo   All packages OK
+
+echo   All packages OK
+
 
 REM ============================================================
-REM  Step 3: 配置变更检测 (P2-6)
-REM 首次启动或 pipe_cfg.yaml 变更时提醒重启
+REM  Step 3: Config change detection
 REM ============================================================
 echo.
 echo [3/8] Checking config changes...
-set "CFG_FILE=%PROJECT_DIR%pipe_cfg.yaml"
+set "CFG_FILE=%PROJECT_DIR%\pipe_cfg.yaml"
 set "CFG_STAMP=%TEMP%\citrinitas_pipe_cfg_stamp.txt"
 
 if not exist "%CFG_FILE%" (
-    echo   [^^!] pipe_cfg.yaml missing. Please run install.ps1.
-    goto :skip_cfg_check
+    echo   [!] pipe_cfg.yaml missing. Please run install.ps1.
+    goto skip_cfg_check
 )
 
-powershell -NoProfile -ExecutionPolicy Bypass -File "%PROJECT_DIR%scripts\cfg_check.ps1" -CfgFile "%CFG_FILE%" -StampFile "%CFG_STAMP%"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PROJECT_DIR%\scripts\cfg_check.ps1" -CfgFile "%CFG_FILE%" -StampFile "%CFG_STAMP%"
 
 :skip_cfg_check
 
+
 REM ============================================================
-REM  Step 4: 检查 Ollama (P0-4)
+REM  Step 4: Check Ollama
 REM ============================================================
 echo.
 echo [4/8] Checking Ollama...
 
 where ollama >NUL 2>NUL
-if %ERRORLEVEL% EQU 0 (
-    REM Ollama installed, check if running
-    ollama list >NUL 2>NUL
-    if %ERRORLEVEL% EQU 0 (
-        echo   Ollama is running
-        echo   Checking embed model...
-        ollama list 2>NUL | findstr /C:"qwen3-embedding" >NUL
-        if %ERRORLEVEL% EQU 0 (
-            echo   Embed model ready: qwen3-embedding
-        ) else (
-            echo   [^^!] Embed model not found. Please run: ollama pull qwen3-embedding:4b
-        )
-    ) else (
-        echo   [^^!] Ollama installed but not running. Start Ollama first.
-        echo   Vector embedding will not work without Ollama.
-    )
-) else (
-    echo   [^^!] Ollama not installed. Vector embedding will not work.
+if %ERRORLEVEL% NEQ 0 (
+    echo   [!] Ollama not installed. Vector embedding will not work.
     echo   Install from: https://ollama.com
+    goto skip_ollama_check
 )
 
-REM  LLM API check removed -- app starts without LLM, degrades gracefully at runtime
+ollama list >NUL 2>NUL
+if %ERRORLEVEL% NEQ 0 (
+    echo   [!] Ollama installed but not running. Start Ollama first.
+    echo   Vector embedding will not work without Ollama.
+    goto skip_ollama_check
+)
+
+echo   Ollama is running
+echo   Checking embed model...
+ollama list 2>NUL | findstr /C:"qwen3-embedding" >NUL
+if %ERRORLEVEL% NEQ 0 (
+    echo   [!] Embed model not found. Please run: ollama pull qwen3-embedding:4b
+) else (
+    echo   Embed model ready: qwen3-embedding
+)
+
+:skip_ollama_check
+
 
 REM ============================================================
-REM  Step 5: 启动 Qdrant（自动检测 + 自动安装）
+REM  Step 5: Start Qdrant
 REM ============================================================
 echo.
 echo [5/8] Starting Qdrant...
 
-set "QDRANT_EXE="
-set "QDRANT_SKIP="
+REM Try to start Qdrant (detects, starts if needed, health checks)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PROJECT_DIR%\scripts\qdrant_helper.ps1" -Action start -ProjectDir "%PROJECT_DIR%" -MaxRetries 30 -RetryDelay 2
+if %ERRORLEVEL% EQU 0 goto skip_qdrant
 
-REM 5a. 调用 qdrant_helper.ps1 检测 Qdrant
-REM     Result: API_ALREADY_RUNNING = already serving on port
-REM             path-to-exe     = found binary
-REM             (empty)         = not found
-echo   Detecting Qdrant...
-powershell -NoProfile -ExecutionPolicy Bypass -File "%PROJECT_DIR%scripts\qdrant_helper.ps1" -Action detect -ProjectDir "%PROJECT_DIR%" >NUL 2>&1
-set "QDRANT_RESULT="
-set "QDRANT_TMP=%TEMP%\qdrant_detect_result.txt"
-if exist "!QDRANT_TMP!" (
-    REM 用 PowerShell 读取临时文件（编码安全）
-    for /f "usebackq delims=" %%r in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "& { Get-Content '%QDRANT_TMP%' -Encoding UTF8 -First 1 }"`) do set "QDRANT_RESULT=%%r"
-)
-
-REM 检查检测结果
-if "!QDRANT_RESULT!"=="API_ALREADY_RUNNING" (
-    echo   Qdrant is already running and healthy ^(port 6333^)
-    set "QDRANT_SKIP=0"
-    goto :skip_qdrant
-)
-
-if "!QDRANT_RESULT!"=="ZOMBIE" (
-    echo   Qdrant process exists but not responding. Killing zombie...
-    taskkill /F /IM qdrant.exe 2>NUL
-    timeout /t 2 /nobreak >NUL
-    echo   Re-detecting Qdrant binary...
-    powershell -NoProfile -ExecutionPolicy Bypass -File "%PROJECT_DIR%scripts\qdrant_helper.ps1" -Action detect -ProjectDir "%PROJECT_DIR%" >NUL 2>&1
-    set "QDRANT_RESULT="
-    if exist "!QDRANT_TMP!" (
-        for /f "usebackq delims=" %%r in ("!QDRANT_TMP!") do set "QDRANT_RESULT=%%r"
-    )
-    if not "!QDRANT_RESULT!"=="" (
-        set "QDRANT_EXE=!QDRANT_RESULT!"
-        echo   Found Qdrant: !QDRANT_EXE!
-        goto :launch_qdrant
-    )
-    echo   [ERROR] Qdrant binary not found after killing zombie.
-    pause
-    exit /b 1
-)
-
-if not "!QDRANT_RESULT!"=="" (
-    set "QDRANT_EXE=!QDRANT_RESULT!"
-    echo   Found Qdrant: !QDRANT_EXE!
-    goto :launch_qdrant
-)
-
-REM 5b. 未检测到 -> 询问用户是否自动安装
+REM start failed - Qdrant not found, ask user to install
 echo   [!] Qdrant not found on this system.
 echo   Citrinitas needs Qdrant for vector search.
 echo.
 set /p QDRANT_INSTALL="  Auto-install Qdrant locally (Y/N)? [Y]: "
 if "!QDRANT_INSTALL!"=="" set "QDRANT_INSTALL=Y"
+if /i "!QDRANT_INSTALL!"=="Y" goto do_install_qdrant
+goto skip_qdrant
 
-if /i "!QDRANT_INSTALL!"=="Y" (
-    echo   Installing Qdrant to %PROJECT_DIR%qdrant\ ...
-    powershell -NoProfile -ExecutionPolicy Bypass -File "%PROJECT_DIR%scripts\qdrant_helper.ps1" -Action install -ProjectDir "%PROJECT_DIR%" >NUL 2>&1
-    if !ERRORLEVEL! EQU 0 (
-        REM 重新检测（读临时文件）
-        set "QDRANT_RESULT="
-        set "QDRANT_TMP=%TEMP%\qdrant_detect_result.txt"
-        if exist "!QDRANT_TMP!" (
-            REM 用 PowerShell 读取临时文件（编码安全）
-            for /f "usebackq delims=" %%r in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "& { Get-Content '!QDRANT_TMP!' -Encoding UTF8 -First 1 }"`) do set "QDRANT_RESULT=%%r"
-        )
-        if not "!QDRANT_RESULT!"=="" (
-            set "QDRANT_EXE=!QDRANT_RESULT!"
-            echo   Qdrant installed successfully: !QDRANT_EXE!
-            goto :launch_qdrant
-        )
-    )
+:do_install_qdrant
+echo   Installing Qdrant to %PROJECT_DIR%\qdrant\ ...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PROJECT_DIR%\scripts\qdrant_helper.ps1" -Action install -ProjectDir "%PROJECT_DIR%"
+if %ERRORLEVEL% NEQ 0 (
     echo   [ERROR] Auto-install failed. Please install manually.
     echo   Visit: https://github.com/qdrant/qdrant/releases
     pause
-    exit /b 1
-) else (
-    echo   [^^!] Skipping Qdrant. Vector search will be disabled.
-    set "QDRANT_SKIP=1"
-    goto :skip_qdrant
+    goto error_exit
 )
 
-REM 5c. 启动 Qdrant
-:launch_qdrant
-echo   Launching Qdrant...
-set "QDRANT_DIR="
-for %%p in ("!QDRANT_EXE!\..") do set "QDRANT_DIR=%%~fp"
+REM Install succeeded, try start again
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PROJECT_DIR%\scripts\qdrant_helper.ps1" -Action start -ProjectDir "%PROJECT_DIR%" -MaxRetries 30 -RetryDelay 2
+if %ERRORLEVEL% EQU 0 goto skip_qdrant
 
-REM 使用 qdrant_helper.ps1 start 动作启动 Qdrant（自动检测+启动+健康检查）
-powershell -NoProfile -ExecutionPolicy Bypass -File "%PROJECT_DIR%scripts\qdrant_helper.ps1" -Action start -ProjectDir "%PROJECT_DIR%" -MaxRetries 30 -RetryDelay 2
-if !ERRORLEVEL! NEQ 0 (
-    echo   [ERROR] Failed to start Qdrant. Check qdrant.log for details.
-    pause
-    exit /b 1
+echo   [ERROR] Failed to start Qdrant after install.
+echo   Check qdrant.log for details:
+if exist "%PROJECT_DIR%\qdrant.log" (
+    powershell -NoProfile -Command "Get-Content '%PROJECT_DIR%\qdrant.log' -Tail 20"
 )
-set "QDRANT_SKIP=0"
-goto :skip_qdrant
+pause
+goto error_exit
 
 :skip_qdrant
 
+
 REM ============================================================
-REM  Step 6: 守望文件夹守护进程 (A4 -- 由 main.py 内部启动)
+REM  Step 6: Watch folder info
 REM ============================================================
 echo.
 echo [6/8] Watch folder: enabled
 echo   Drop files into data\watch\ and they will be auto-ingested.
 echo   data\watch_processed\ = success    data\watch_dead_letter\ = need attention
 
+
 REM ============================================================
-REM  Step 7: 显示配置摘要
+REM  Step 7: Config summary
 REM ============================================================
 echo.
 echo [7/8] Configuration summary:
 echo   Web UI:      http://127.0.0.1:8080
 echo   Qdrant:      http://127.0.0.1:6333
 echo   Embed model: qwen3-embedding:4b
-echo   Config:      pipe_cfg.yaml ^(tuneables^) + .env ^(secrets^)
-echo   Watch dir:   %PROJECT_DIR%data\watch\
+echo   Config:      pipe_cfg.yaml (tuneables) + .env (secrets)
+echo   Watch dir:   %PROJECT_DIR%\data\watch\
+
 
 REM ============================================================
-REM  Step 7b: 模型预热（PaddleOCR + Ollama 嵌入）
+REM  Step 7b: Model warmup
 REM ============================================================
 echo.
-echo [7b/8] Warming up models ^(PaddleOCR + Ollama^)...
+echo [7b/8] Warming up models (PaddleOCR + Ollama)...
 venv\Scripts\python.exe warmup.py
-if %ERRORLEVEL% EQU 0 (
-    echo   Models warmed up successfully.
+if %ERRORLEVEL% NEQ 0 (
+    echo   [!] Model warmup failed (some models may be unavailable)
 ) else (
-    echo   [^^!] Model warmup failed ^(some models may be unavailable^)
+    echo   Models warmed up successfully.
 )
 
+
 REM ============================================================
-REM  Step 7c: 预热后重新检查 Qdrant（防止预热期间崩溃）
+REM  Step 7c: Re-check Qdrant after warmup
 REM ============================================================
 echo.
 echo [7c/8] Re-checking Qdrant after warmup...
-powershell -NoProfile -ExecutionPolicy Bypass -File "%PROJECT_DIR%scripts\qdrant_helper.ps1" -Action health -MaxRetries 3 -RetryDelay 2
-if !ERRORLEVEL! NEQ 0 (
-    echo   [WARNING] Qdrant is not responding after warmup.
-    echo   Attempting to restart Qdrant...
-    powershell -NoProfile -ExecutionPolicy Bypass -File "%PROJECT_DIR%scripts\qdrant_helper.ps1" -Action start -ProjectDir "%PROJECT_DIR%" -MaxRetries 15 -RetryDelay 2
-    if !ERRORLEVEL! NEQ 0 (
-        echo   [ERROR] Failed to restart Qdrant.
-        echo   Check qdrant.log for details (last 20 lines):
-        if exist "%PROJECT_DIR%qdrant.log" (
-            powershell -NoProfile -Command "Get-Content '%PROJECT_DIR%qdrant.log' -Tail 20"
-        )
-        pause
-        exit /b 1
-    )
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PROJECT_DIR%\scripts\qdrant_helper.ps1" -Action health -MaxRetries 3 -RetryDelay 2
+if %ERRORLEVEL% EQU 0 goto qdrant_ok
+
+REM Qdrant not responding, try to restart
+echo   [WARNING] Qdrant is not responding after warmup.
+echo   Attempting to restart Qdrant...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PROJECT_DIR%\scripts\qdrant_helper.ps1" -Action start -ProjectDir "%PROJECT_DIR%" -MaxRetries 15 -RetryDelay 2
+if %ERRORLEVEL% EQU 0 goto qdrant_ok
+
+REM Restart failed
+echo   [ERROR] Failed to restart Qdrant.
+echo   Check qdrant.log for details (last 20 lines):
+if exist "%PROJECT_DIR%\qdrant.log" (
+    powershell -NoProfile -Command "Get-Content '%PROJECT_DIR%\qdrant.log' -Tail 20"
 )
+pause
+goto error_exit
+
+:qdrant_ok
 echo   Qdrant OK after warmup.
 
+
 REM ============================================================
-REM  Step 8: 启动 Web UI
+REM  Step 8: Start Web UI
 REM ============================================================
 echo.
 echo [8/8] Starting Web UI...
 echo.
 echo   Press Ctrl+C to stop all services.
-echo ═══════════════════════════════════════════════════════
+echo ============================================================
 echo.
 
 venv\Scripts\python.exe main.py
@@ -296,13 +244,11 @@ echo.
 echo   Web UI stopped.
 
 REM ============================================================
-REM 优雅关闭 (P2-4)
-REM      shutdown order: watch daemon(stops with main) -> Web UI(stopped) -> Qdrant -> (Ollama stays)
+REM  Graceful shutdown
 REM ============================================================
 echo.
 echo Shutting down services...
 
-REM Qdrant
 tasklist /FI "IMAGENAME eq qdrant.exe" 2>NUL | find /I "qdrant.exe" >NUL
 if %ERRORLEVEL% EQU 0 (
     echo   Stopping Qdrant...
@@ -313,7 +259,20 @@ if %ERRORLEVEL% EQU 0 (
 )
 
 echo.
-echo ═══════════════════════════════════════════════════════
+echo ============================================================
 echo   All services stopped. Goodbye!
-echo ═══════════════════════════════════════════════════════
+echo ============================================================
 pause
+goto :eof
+
+
+REM ============================================================
+REM  Error handler
+REM ============================================================
+:error_exit
+echo.
+echo ============================================================
+echo   Script exited with an error. See messages above.
+echo ============================================================
+pause
+cmd /k

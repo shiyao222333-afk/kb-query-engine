@@ -8,9 +8,9 @@
 
 ## 当前状态
 
-- 当前版本：**v1.0.0 🔍 开发完成，待最终验证**（A1-A5 全部完成，代码质量审查已通过）
-- 活跃 Bug：**0**（搜索阶段 P1 O2/Q1/P1 已修复，2026-06-24）
-- Git 状态：main 分支，代码已推送到 GitHub (commit 2aa45ba)
+- 当前版本：**v1.0.0 🔍 开发完成，L3 服务测试已通过**（A1-A5 全部完成 + VFY-001~005 全部修复）
+- 活跃 Bug：**0**（所有已知 Bug 已修复，2026-06-28）
+- Git 状态：main 分支，本地有未提交修改（run.bat + CHANGELOG + PROJECT_PLAN）
 
 ---
 
@@ -893,7 +893,8 @@ v1.0.0 代码已完成（A1-A5 全部 ✅），但受 `run.bat` Qdrant 检测问
 |------|------|
 | `PROJECT_PLAN.md` | 功能路线图 + 设计决策（本文件） |
 | `CHANGELOG.md` | 版本变更日志 |
-| `ISSUES.md` | Bug 跟踪 |
+| `BLUEPRINT.md` | 项目宪法 |
+| `FLOWCHART.md` | 流程框图 |
 | `README.md` | 项目门面 |
 | `docs/schema.md` | 字段设计文档 |
 | `WEB_UI_PLAN.md` | v0.2 Web UI 任务清单（已归档） |
