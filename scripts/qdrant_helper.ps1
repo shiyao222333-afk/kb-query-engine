@@ -124,7 +124,9 @@ if ($Action -eq "detect") {
     }
 
     # 1f. 去重并写结果文件
-    $candidates = $candidates | Select-Object -Unique
+    # ⚠️  @() 必须保留：Select-Object -Unique 在单元素时会展开为 String，
+    #    导致 $candidates[0] 返回第一个字符而非第一个元素
+    $candidates = @($candidates | Select-Object -Unique)
     if ($candidates.Count -gt 0) {
         Write-DetectResult $candidates[0]
         exit 0
@@ -285,23 +287,13 @@ if ($Action -eq "health") {
 #          ↓ 启动成功 → 调用 health action 逻辑检查就绪
 # ─────────────────────────────────────────────
 if ($Action -eq "start") {
-    # 从临时文件读取 Qdrant 路径
-    $tmpFile = Join-Path $env:TEMP "qdrant_detect_result.txt"
-    $qdrantExe = ""
-    if (Test-Path $tmpFile) {
-        $qdrantExe = Get-Content $tmpFile -Encoding UTF8 -First 1
-    }
+    # 查找 Qdrant 路径（不依赖 temp 文件，直接搜索）
+    $qdrantExe = $null
 
-    if (-not $qdrantExe -or -not (Test-Path $qdrantExe)) {
-        Write-Host "  [ERROR] Qdrant path not found in temp file. Please run detect first."
-        exit 1
-    }
-
-    # 检查是否已在运行
+    # 1. 先检查是否已运行且健康
     $alreadyRunning = $false
     try {
         $proc = Get-Process qdrant -ErrorAction Stop
-        # 检查是否健康
         try {
             $resp = Invoke-WebRequest -Uri "http://127.0.0.1:6333/collections" -Method GET -TimeoutSec 3 -UseBasicParsing -ErrorAction Stop
             if ($resp.StatusCode -eq 200) {
@@ -315,7 +307,72 @@ if ($Action -eq "start") {
         exit 0
     }
 
-    # 启动 Qdrant
+    # 1b. 进程存在但不响应 → 杀掉僵尸进程
+    try {
+        $zombie = Get-Process qdrant -ErrorAction Stop
+        if ($zombie) {
+            Write-Host "  Qdrant process exists but not responding. Killing zombie (PID: $($zombie.Id))..."
+            Stop-Process -Id $zombie.Id -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 2
+        }
+    } catch { }
+
+    # 2. 未运行 → 查找 Qdrant 二进制文件
+    #    复用 detect action 的查找逻辑
+    $candidates = @()
+
+    # 2a. 读取 .env 中的 QDRANT_PATH
+    if ($ProjectDir -and (Test-Path (Join-Path $ProjectDir ".env"))) {
+        $envPath = Get-Content (Join-Path $ProjectDir ".env") | ForEach-Object {
+            if ($_ -match '^QDRANT_PATH=(.+)$') { $Matches[1].Trim() }
+        } | Select-Object -First 1
+        if ($envPath -and (Test-Path $envPath)) {
+            $candidates += $envPath
+        }
+    }
+
+    # 2b. PATH 中查找
+    try {
+        $inPath = (Get-Command qdrant -ErrorAction Stop).Source
+        if ($inPath) { $candidates += $inPath }
+    } catch { }
+
+    # 2c. 项目本地目录
+    if ($ProjectDir) {
+        $localPath = Join-Path $ProjectDir "qdrant\qdrant.exe"
+        if (Test-Path $localPath) { $candidates += $localPath }
+    }
+
+    # 2d. 有限递归搜索
+    $searchRoots = @()
+    if ($env:ProgramFiles)       { $searchRoots += $env:ProgramFiles }
+    if (${env:ProgramFiles(x86)}) { $searchRoots += ${env:ProgramFiles(x86)} }
+    if ($env:LOCALAPPDATA)      { $searchRoots += $env:LOCALAPPDATA }
+    if ($env:USERPROFILE)       { $searchRoots += $env:USERPROFILE }
+    if ($env:APPDATA)          { $searchRoots += $env:APPDATA }
+
+    foreach ($root in $searchRoots) {
+        if (Test-Path $root) {
+            try {
+                Get-ChildItem -Path $root -Filter "qdrant.exe" -Recurse -Depth 2 -ErrorAction SilentlyContinue | ForEach-Object {
+                    $candidates += $_.FullName
+                }
+            } catch { }
+        }
+    }
+
+    $candidates = @($candidates | Select-Object -Unique)
+
+    if ($candidates.Count -eq 0) {
+        Write-Host "  [ERROR] Qdrant not found. Please install first."
+        Write-Host "  Visit: https://github.com/qdrant/qdrant/releases"
+        exit 1
+    }
+
+    $qdrantExe = $candidates[0]
+    Write-Host "  Found Qdrant: $qdrantExe"
+
+    # 3. 启动 Qdrant
     $qdrantDir = Split-Path $qdrantExe -Parent
     Write-Host "  Starting Qdrant: $qdrantExe"
     Write-Host "  Working directory: $qdrantDir"
@@ -327,9 +384,9 @@ if ($Action -eq "start") {
     }
     Write-Host "  Qdrant process started (PID: $($proc.Id))"
 
-    # 健康检查（复用 health action 的逻辑）
+    # 4. 健康检查
     $healthRetries = if ($MaxRetries -gt 0) { $MaxRetries } else { 30 }
-    $healthDelay = if ($RetryDelay -gt 0) { $RetryDelay } else { 2 }
+    $healthDelay  = if ($RetryDelay -gt 0) { $RetryDelay }  else { 2 }
 
     for ($i = 1; $i -le $healthRetries; $i++) {
         $connected = $false
@@ -356,7 +413,7 @@ if ($Action -eq "start") {
     }
 
     Write-Host "  [ERROR] Qdrant did not start within $($healthRetries * $healthDelay) seconds."
-    Write-Host "  Please check Qdrant installation manually."
+    Write-Host "  Check qdrant.log for details."
     exit 1
 }
 

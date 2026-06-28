@@ -178,12 +178,29 @@ if __name__ in {"__main__", "__mp_main__"}:
     print(f"[启动] 状态刷新完成 — stats={STATE.get('stats')}", flush=True)
 
     print("", flush=True)
-    print("=" * 60, flush=True)
-    print("  ✅ Citrinitas 服务启动成功！", flush=True)
-    print(f"  Web UI:  http://127.0.0.1:8080", flush=True)
-    print("  浏览器将会自动打开（如未打开请手动访问上方地址）", flush=True)
-    print("=" * 60, flush=True)
+    print("*" * 61, flush=True)
+    print("*" + " " * 59 + "*", flush=True)
+    print("*    ✅  Citrinitas 服务启动成功！                           *", flush=True)
+    print("*" + " " * 59 + "*", flush=True)
+    print("*    📍 Web UI:  http://127.0.0.1:8080                      *", flush=True)
+    print("*    📍 Qdrant:  http://127.0.0.1:6333                      *", flush=True)
+    print("*" + " " * 59 + "*", flush=True)
+    print("*    浏览器将会自动打开（如未打开请手动访问上方地址）           *", flush=True)
+    print("*" + " " * 59 + "*", flush=True)
+    print("*" * 61, flush=True)
     print("", flush=True)
+
+    # 备用浏览器开启（NiceGUI 的 webbrowser.open 在 Windows 下可能静默失败）
+    def _fallback_browser():
+        for i in range(30):
+            time.sleep(0.5)
+            try:
+                _r.get("http://127.0.0.1:8080", timeout=1)
+                os.startfile("http://127.0.0.1:8080")
+                break
+            except Exception:
+                continue
+    threading.Thread(target=_fallback_browser, daemon=True).start()
 
     ui.run(
         title="Citrinitas · 熔知",

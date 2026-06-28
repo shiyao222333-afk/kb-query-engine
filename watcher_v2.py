@@ -1246,12 +1246,12 @@ def _processing_loop_v2(queue: Queue, stop_event: threading.Event):
             if not _is_write_complete(filepath):
                 time.sleep(1)
                 # 文件可能在等待期间被删除（竞态保护）
-            if os.path.isfile(filepath):
-                try:
-                    _queued_files.add(filepath)  # 记录到队列集合
-                    queue.put(filepath, timeout=WATCH_V2_QUEUE_PUT_TIMEOUT)
-                except Full:
-                    pass
+                if os.path.isfile(filepath):
+                    try:
+                        _queued_files.add(filepath)  # 记录到队列集合
+                        queue.put(filepath, timeout=WATCH_V2_QUEUE_PUT_TIMEOUT)
+                    except Full:
+                        pass
                 continue
 
             # 处理文件

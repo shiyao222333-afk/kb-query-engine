@@ -47,6 +47,9 @@ katex_out_*.json
 # Qdrant 哨兵文件
 NUL
 
+# 守望文件夹运行时状态
+data/file_state.jsonl
+
 # 守望文件夹 — 忽略摄入结果，保留 .gitkeep（P2-1）
 watch/processed/*
 watch/failed/*
