@@ -53,10 +53,6 @@ data/file_state.jsonl
 # 守望文件夹（v2）— 摄入文件不提交，仅保留 .gitkeep
 data/inbox/*
 !data/inbox/.gitkeep
-data/watch_processed/*
-!data/watch_processed/.gitkeep
-data/watch_dead_letter/*
-!data/watch_dead_letter/.gitkeep
 
 # WorkBuddy 内部目录
 .workbuddy/

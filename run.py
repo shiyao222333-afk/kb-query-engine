@@ -1,5 +1,6 @@
 """
-Citrinitas 一键启动器
+Citrinitas 一键启动器（仅开发用）
+⚠️ 生产环境请使用 run.bat（自动管理 Qdrant 启停 + Ollama 健康检查 + 模型预热）
 用法: python run.py
 功能:
   1. 自动杀掉占用 8080 端口的旧 Python 进程

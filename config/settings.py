@@ -188,67 +188,9 @@ TABLE_SPLIT_THRESHOLD = _yaml_or_env(
     validator=lambda v: None if v >= 1 else "must be >= 1",
 )
 
-# ── 守望文件夹 ──
-WATCH_POLL_INTERVAL = _yaml_or_env(
-    "watch.poll_interval", "KB_WATCH_POLL_INTERVAL", 1.0, cast=float,
-    validator=lambda v: None if v > 0 else "must be > 0",
-)
-WATCH_WRITE_COMPLETE_CHECKS = _yaml_or_env(
-    "watch.write_complete_checks", "KB_WATCH_WRITE_COMPLETE_CHECKS", 2, cast=int,
-    validator=lambda v: None if v >= 1 else "must be >= 1",
-)
-WATCH_WRITE_CHECK_INTERVAL = _yaml_or_env(
-    "watch.write_check_interval", "KB_WATCH_WRITE_CHECK_INTERVAL", 0.5, cast=float,
-    validator=lambda v: None if v > 0 else "must be > 0",
-)
-WATCH_MAX_FILE_SIZE_MB = _yaml_or_env(
-    "watch.max_file_size_mb", "KB_WATCH_MAX_FILE_SIZE_MB", 50, cast=int,
-    validator=lambda v: None if v >= 0 else "must be >= 0",
-)
-WATCH_PROCESSING_TIMEOUT = _yaml_or_env(
-    "watch.processing_timeout", "KB_WATCH_PROCESSING_TIMEOUT", 600, cast=int,
-    validator=lambda v: None if v >= 10 else "must be >= 10",
-)
-WATCH_DLQ_MAX_SIZE_MB = _yaml_or_env(
-    "watch.dlq_max_size_mb", "KB_WATCH_DLQ_MAX_SIZE_MB", 500, cast=int,
-    validator=lambda v: None if v >= 10 else "must be >= 10",
-)
-WATCH_DLQ_TTL_DAYS = _yaml_or_env(
-    "watch.dlq_ttl_days", "KB_WATCH_DLQ_TTL_DAYS", 30, cast=int,
-    validator=lambda v: None if v >= 0 else "must be >= 0",
-)
-WATCH_PROCESSED_TTL_DAYS = _yaml_or_env(
-    "watch.processed_ttl_days", "KB_WATCH_PROCESSED_TTL_DAYS", 30, cast=int,
-    validator=lambda v: None if v >= 0 else "must be >= 0",
-)
-WATCH_STAGING_TTL_DAYS = _yaml_or_env(
-    "watch.staging_ttl_days", "KB_WATCH_STAGING_TTL_DAYS", 7, cast=int,
-    validator=lambda v: None if v >= 0 else "must be >= 0",
-)
-WATCH_INFRA_RETRY_INTERVAL = _yaml_or_env(
-    "watch.infra_retry_interval", "KB_WATCH_INFRA_RETRY_INTERVAL", 30, cast=int,
-    validator=lambda v: None if v >= 5 else "must be >= 5",
-)
-WATCH_QUEUE_MAX_SIZE = _yaml_or_env(
-    "watch.queue_max_size", "KB_WATCH_QUEUE_MAX_SIZE", 100, cast=int,
-    validator=lambda v: None if v >= 1 else "must be >= 1",
-)
-
-# temp_patterns 是列表，不用 _yaml_or_env，直接从 YAML 取
-def _get_temp_patterns():
-    patterns = _cfg.get("watch", {}).get("temp_patterns", [])
-    if not patterns or not isinstance(patterns, list):
-        return ["~$*", "*.tmp", "*.part", "*.crdownload", "thumbs.db", "desktop.ini"]
-    return [str(p) for p in patterns]
-
-WATCH_TEMP_PATTERNS = _get_temp_patterns()
-
-
 # ═══════════════════════════════════════════════════════════════
-# 启动时打印配置摘要
+# 守望文件夹 v2（统一收件箱 + 状态追踪）
 # ═══════════════════════════════════════════════════════════════
-
-# ── 守望文件夹 v2（统一收件箱 + 状态追踪）──
 WATCH_V2_INBOX_DIR = _yaml_or_env(
     "watch_v2.inbox_dir", "KB_WATCH_V2_INBOX_DIR", "data/inbox",
 )
