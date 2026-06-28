@@ -233,6 +233,7 @@ REM ============================================================
 echo.
 echo [8/8] Starting Web UI...
 echo.
+echo   Browser will open automatically at http://127.0.0.1:8080
 echo   Press Ctrl+C to stop all services.
 echo ============================================================
 echo.

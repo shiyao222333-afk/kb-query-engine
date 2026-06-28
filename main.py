@@ -177,11 +177,19 @@ if __name__ in {"__main__", "__mp_main__"}:
     refresh_system_state()
     print(f"[启动] 状态刷新完成 — stats={STATE.get('stats')}", flush=True)
 
+    print("", flush=True)
+    print("=" * 60, flush=True)
+    print("  ✅ Citrinitas 服务启动成功！", flush=True)
+    print(f"  Web UI:  http://127.0.0.1:8080", flush=True)
+    print("  浏览器将会自动打开（如未打开请手动访问上方地址）", flush=True)
+    print("=" * 60, flush=True)
+    print("", flush=True)
+
     ui.run(
         title="Citrinitas · 熔知",
         host="0.0.0.0",
         port=8080,
         reload=False,
-        show=False,
+        show=True,
         storage_secret="citrinitas-mindforge-secret",
     )
