@@ -590,16 +590,18 @@ def _build_browse_tab():
 
             # 批量操作栏
             selected_ids = set()
+            selection_label = ui.label(f"已选 0/{len(filtered)}").classes("text-sm text-gray-500")
+
+            def _on_selection_change():
+                selection_label.set_text(f"已选 {len(selected_ids)}/{len(filtered)}")
+
             with batch_bar:
                 ui.button("🗑️ 批量删除选中", on_click=lambda: _batch_delete(selected_ids, _refresh_browse)).props("color=red flat")
-                ui.label(f"已选 0/{len(filtered)}").classes("text-sm text-gray-500").bind_text_from(
-                    selected_ids, backward=lambda s: f"已选 {len(s)}/{len(filtered)}"
-                )
 
             # 文档卡片
             with doc_container:
                 for idx, d in enumerate(filtered):
-                    _build_doc_card(d, idx, selected_ids, _refresh_browse)
+                    _build_doc_card(d, idx, selected_ids, _refresh_browse, _on_selection_change)
 
             # 分页控件
             total = result.get("total", 0)
@@ -629,7 +631,7 @@ def _build_browse_tab():
     ui.button("🔄 刷新", on_click=_refresh_browse).props("flat").classes("mt-2")
 
 
-def _build_doc_card(doc: dict, idx: int, selected_ids: set, on_refresh):
+def _build_doc_card(doc: dict, idx: int, selected_ids: set, on_refresh, on_selection_change=None):
     """渲染单个文档卡片（浏览标签页用）。"""
     title = doc.get("title") or doc.get("source") or "未知"
     doc_uid = doc.get("doc_uid", "")
@@ -647,7 +649,8 @@ def _build_doc_card(doc: dict, idx: int, selected_ids: set, on_refresh):
         with ui.row().classes("w-full items-center gap-2"):
             # 勾选框
             cb = ui.checkbox(on_change=lambda e, uid=doc_uid: (
-                selected_ids.add(uid) if e.value else selected_ids.discard(uid)
+                selected_ids.add(uid) if e.value else selected_ids.discard(uid),
+                on_selection_change() if on_selection_change else None
             )).props("dense")
 
             # 标题
