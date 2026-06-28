@@ -28,7 +28,7 @@ cd /d "%PROJECT_DIR%\"
 
 echo.
 echo ============================================================
-echo    Citrinitas v1.0.0
+echo    Citrinitas v1.0.1
 echo ============================================================
 echo.
 
@@ -170,46 +170,26 @@ REM ============================================================
 REM  Step 6: Watch folder info
 REM ============================================================
 echo.
-echo [6/8] Watch folder: enabled
-echo   Drop files into data\watch\ and they will be auto-ingested.
-echo   data\watch_processed\ = success    data\watch_dead_letter\ = need attention
-
-
-REM ============================================================
-REM  Step 7: Config summary
-REM ============================================================
+echo [6/8] Inbox folder: enabled
+echo   Drop files into data\inbox\ and they will be auto-ingested.
 echo.
-echo [7/8] Configuration summary:
+echo   Configuration summary:
 echo   Web UI:      http://127.0.0.1:8080
 echo   Qdrant:      http://127.0.0.1:6333
 echo   Embed model: qwen3-embedding:4b
 echo   Config:      pipe_cfg.yaml (tuneables) + .env (secrets)
-echo   Watch dir:   %PROJECT_DIR%\data\watch\
 
 
 REM ============================================================
-REM  Step 7b: Model warmup
-REM ============================================================
-echo.
-echo [7b/8] Warming up models (PaddleOCR + Ollama)...
-venv\Scripts\python.exe warmup.py
-if %ERRORLEVEL% NEQ 0 (
-    echo   [!] Model warmup failed (some models may be unavailable)
-) else (
-    echo   Models warmed up successfully.
-)
-
-
-REM ============================================================
-REM  Step 7c: Re-check Qdrant after warmup
+REM  Step 7: Qdrant health check before launch
 REM ============================================================
 echo.
-echo [7c/8] Re-checking Qdrant after warmup...
+echo [7/8] Health checking Qdrant...
 powershell -NoProfile -ExecutionPolicy Bypass -File "%PROJECT_DIR%\scripts\qdrant_helper.ps1" -Action health -MaxRetries 3 -RetryDelay 2
 if %ERRORLEVEL% EQU 0 goto qdrant_ok
 
 REM Qdrant not responding, try to restart
-echo   [WARNING] Qdrant is not responding after warmup.
+echo   [WARNING] Qdrant is not responding.
 echo   Attempting to restart Qdrant...
 powershell -NoProfile -ExecutionPolicy Bypass -File "%PROJECT_DIR%\scripts\qdrant_helper.ps1" -Action start -ProjectDir "%PROJECT_DIR%" -MaxRetries 15 -RetryDelay 2
 if %ERRORLEVEL% EQU 0 goto qdrant_ok
@@ -224,7 +204,7 @@ pause
 goto error_exit
 
 :qdrant_ok
-echo   Qdrant OK after warmup.
+echo   Qdrant OK.
 
 
 REM ============================================================

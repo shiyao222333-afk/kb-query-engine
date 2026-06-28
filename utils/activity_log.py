@@ -10,7 +10,10 @@ v0.9.0: 新建模块
 import json
 import os
 import threading
+import logging
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_PATH = os.path.join(PROJECT_DIR, "local_data", "activity_log.jsonl")
@@ -50,8 +53,8 @@ def log_activity(
         try:
             with open(LOG_PATH, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-        except Exception:
-            pass  # 静默失败，不影响主流程
+        except Exception as e:
+            logger.debug(f"[Activity] 写入失败: {e}")  # 静默失败，不影响主流程
 
 
 def read_recent_activities(limit: int = 20) -> list:
@@ -66,7 +69,8 @@ def read_recent_activities(limit: int = 20) -> list:
                 line = line.strip()
                 if line:
                     lines.append(line)
-    except Exception:
+    except Exception as e:
+        logger.debug(f"[Activity] 读取失败: {e}")
         return []
 
     # 取最近 limit 条，倒序（最新在前）

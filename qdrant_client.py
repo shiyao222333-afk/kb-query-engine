@@ -29,7 +29,8 @@ def _ensure_collection(collection: str) -> bool:
                 logger.warning(f"[Qdrant] 自动创建集合失败: {result.get('error')}")
                 return False
         return True
-    except Exception:
+    except Exception as e:
+        logger.warning(f"[Qdrant] 集合初始化失败: {e}")
         return False
 
 
@@ -229,7 +230,8 @@ def get_embed_models() -> list[str]:
         for m in data.get("models", []):
             models.append(m["name"])
         return models
-    except Exception:
+    except Exception as e:
+        logger.warning(f"[Qdrant] 获取模型列表失败: {e}")
         return []
 
 
@@ -249,5 +251,6 @@ def has_any_data() -> bool:
             if c.get("points", 0) > 0:
                 return True
         return False
-    except Exception:
+    except Exception as e:
+        logger.debug(f"[Qdrant] 数据检查失败: {e}")
         return False

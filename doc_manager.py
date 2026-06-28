@@ -60,7 +60,8 @@ def read_ingest_log() -> list[dict]:
                     logger.warning(f"[Scroll] 分页读取失败（跳过此页）: {e}")
                     continue
         return entries
-    except Exception:
+    except Exception as e:
+        logger.warning(f"[IngestLog] 日志读取失败: {e}")
         return []
 
 

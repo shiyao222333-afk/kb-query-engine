@@ -21,6 +21,9 @@ File Handler — 文件类型检测 + 文本提取 + 自动元数据提取
 import os
 import re
 import hashlib
+import logging
+
+logger = logging.getLogger(__name__)
 
 from typing import Optional
 
@@ -635,7 +638,8 @@ def _metadata_epub(file_path: str) -> dict:
 
     try:
         book = epub.read_epub(file_path)
-    except Exception:
+    except Exception as e:
+        logger.debug(f"[FileHandler] EPUB 元数据读取失败: {e}")
         return {}
 
     meta = {}
@@ -681,7 +685,8 @@ def _metadata_pdf(file_path: str) -> dict:
         info = reader.metadata
         if info is None:
             return {}
-    except Exception:
+    except Exception as e:
+        logger.debug(f"[FileHandler] PDF 元数据读取失败: {e}")
         return {}
 
     meta = {}
@@ -714,7 +719,8 @@ def _metadata_html(file_path: str) -> dict:
     text = _read_text_with_fallback(file_path)
     try:
         soup = BeautifulSoup(text, "html.parser")
-    except Exception:
+    except Exception as e:
+        logger.debug(f"[FileHandler] HTML 元数据解析失败: {e}")
         return {}
 
     meta = {}

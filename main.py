@@ -21,7 +21,7 @@ from utils.ui_shared import (
     set_active_collection, EMBED_PRESETS, _status_tick, set_main_loop,
 )
 import kb_query
-import watcher_v2
+import watcher
 
 from pages.ingest import page_ingest
 from pages.search import page_search
@@ -55,7 +55,7 @@ def startup():
     threading.Thread(target=_auto_shutdown, daemon=True).start()
     # 启动守望文件夹 v2
     try:
-        watcher_v2.start_watcher_v2()
+        watcher.start_watcher()
         print("[启动] 守望文件夹 v2 已启动", flush=True)
     except Exception as e:
         print(f"[启动] ⚠️ 守望文件夹 v2 启动失败: {e}", flush=True)
@@ -67,7 +67,7 @@ def shutdown():
     """关闭回调：停止守望文件夹。"""
     print("[关闭] 停止守望文件夹 v2…", flush=True)
     try:
-        watcher_v2.stop_watcher_v2()
+        watcher.stop_watcher()
     except Exception as e:
         print(f"[关闭] 守望文件夹 v2 停止异常: {e}", flush=True)
 
@@ -88,7 +88,7 @@ def _auto_shutdown():
                 print("\n[Citrinitas] 浏览器已关闭，自动退出。")
                 # 先优雅停止守望文件夹，释放锁和资源
                 try:
-                    watcher_v2.stop_watcher_v2()
+                    watcher.stop_watcher()
                 except Exception as e:
                     print(f"[Citrinitas] 守望停止异常: {e}")
                 os._exit(0)
@@ -103,9 +103,9 @@ def _health_check():
         "qdrant_online": STATE["qdrant_online"],
         "stats": STATE.get("stats"),
         "pid": os.getpid(),
-        "watcher_v2": {
-            "alive": watcher_v2.is_watcher_v2_alive(),
-            "stats": watcher_v2.get_watch_v2_stats(),
+        "watcher": {
+            "alive": watcher.is_watcher_alive(),
+            "stats": watcher.get_watch_stats(),
         },
     })
 
@@ -208,5 +208,5 @@ if __name__ in {"__main__", "__mp_main__"}:
         port=8080,
         reload=False,
         show=True,
-        storage_secret="citrinitas-mindforge-secret",
+        storage_secret=os.environ.get("STORAGE_SECRET", "citrinitas-dev-secret-change-me"),
     )
